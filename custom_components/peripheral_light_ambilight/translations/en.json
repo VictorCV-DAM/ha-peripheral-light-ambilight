@@ -1,0 +1,17 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Peripheral Light Ambilight Setup",
+        "description": "Select the peripheral smart light entities in your room to synchronize with each edge of the TV Ambilight camera.",
+        "data": {
+          "left_light": "Left Peripheral Light",
+          "center_light": "Bottom / Center Peripheral Light",
+          "right_light": "Right Peripheral Light",
+          "ceiling_light": "Ceiling / Top Light (Optional)",
+          "transition": "Transition Speed (seconds)"
+        }
+      }
+    }
+  }
+}

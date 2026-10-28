@@ -1,18 +1,19 @@
 <div align="center">
-  <h1>Govee DreamView T1 ESP32 Ambilight Bridge for Home Assistant</h1>
+  <h1>Peripheral Light Ambilight for Home Assistant</h1>
+  <p><b>Extend your TV Ambilight to peripheral room lights with ultra-low latency</b></p>
 
   [![HACS Custom](https://img.shields.io/badge/HACS-Custom%20Integration-41BDF5.svg?logo=homeassistantcommunitystore)](https://github.com/hacs/default)
   [![Home Assistant](https://img.shields.io/badge/Home%20Assistant-2024.1.0%2B-41BDF5.svg?logo=home-assistant)](https://www.home-assistant.io/)
-  [![GitHub Release](https://img.shields.io/github/v/release/VictorCV-DAM/ha-govee-dreamview-ambilight)](https://github.com/VictorCV-DAM/ha-govee-dreamview-ambilight/releases)
+  [![GitHub Release](https://img.shields.io/github/v/release/VictorCV-DAM/ha-peripheral-light-ambilight)](https://github.com/VictorCV-DAM/ha-peripheral-light-ambilight/releases)
   [![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](LICENSE)
   [![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-Donate-orange?logo=buy-me-a-coffee)](https://buymeacoffee.com/VictorCV)
   [![PayPal](https://img.shields.io/badge/PayPal-Donate-blue?logo=paypal)](https://paypal.me/victorcava)
   [![Ko-fi](https://img.shields.io/badge/Ko--fi-Donate-red?logo=ko-fi)](https://ko-fi.com/victorcv)
 </div>
 
-High-performance, ultra-low latency hardware bridge and Home Assistant integration that passively sniffs the proprietary WS2811 data stream of a **Govee DreamView T1 (H6199)** camera-based TV backlight system and synchronizes your entire room's smart lights in real time with zero lag.
+High-performance, ultra-low latency hardware bridge and Home Assistant integration that expands your TV's ambient backlighting to all **peripheral room lights** (dining room spots, side table lamps, wall sconces, and ceiling lights). Passively sniffs the proprietary WS2811 data stream of a **Govee DreamView T1 (H6199)** camera system and coordinates the room lights in real time with zero lag.
 
-Works with **any content** played on the TV: Smart TV built-in apps (Netflix, YouTube, Prime), gaming consoles (PS5, Xbox, Switch), Apple TV, and broadcast TV — without HDMI splitters, without cloud APIs, and without altering or damaging your original Govee setup.
+Works with **any content** displayed on the screen: Smart TV apps (Netflix, YouTube, Prime Video), consoles (PS5, Xbox Series X, Switch), Apple TV, Blu-ray, and live broadcast TV — without HDMI splitters, without cloud delays, and without modifying the original Govee hardware.
 
 ---
 
@@ -23,8 +24,9 @@ Works with **any content** played on the TV: Smart TV built-in apps (Netflix, Yo
 
 ---
 
-## ⚡ Highlights
+## ⚡ Key Capabilities
 
+- **True Room-Scale Peripheral Ambilight:** Extends the TV immersion beyond the display frame to your perimeter and room lighting.
 - **Zero-Lag Real-Time Sync:** Native ~25–30 FPS real-time capture directly from the camera data bus.
 - **Non-Intrusive Sniffing:** High-impedance passive tap on a single data line — the original Govee LED strip continues functioning with 100% factory behavior.
 - **No HDMI Splitter Required:** Works natively with DRM-protected 4K HDR, Dolby Vision, 120Hz VRR, and built-in Smart TV apps.
@@ -116,10 +118,10 @@ TV cameras inherently pick up $50/60\text{ Hz}$ room flicker and sensor noise. W
 
 ### Step 2: Install via HACS
 1. Open **HACS** in Home Assistant $\rightarrow$ Integrations $\rightarrow$ **Custom Repositories**.
-2. Add `https://github.com/VictorCV-DAM/ha-govee-dreamview-ambilight` with category **Integration**.
+2. Add `https://github.com/VictorCV-DAM/ha-peripheral-light-ambilight` with category **Integration**.
 3. Click **Download** and restart Home Assistant.
-4. Go to **Settings ➔ Devices & Services ➔ Add Integration** and search for **Govee DreamView Ambilight Bridge**.
-5. Select your Left, Bottom/Center, Right, and optional Ceiling light entities.
+4. Go to **Settings ➔ Devices & Services ➔ Add Integration** and search for **Peripheral Light Ambilight**.
+5. Select your Left, Bottom/Center, Right, and optional Ceiling peripheral light entities.
 
 ---
 

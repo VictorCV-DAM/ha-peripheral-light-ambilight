@@ -1,24 +1,24 @@
 blueprint:
-  name: "Govee DreamView Ambilight Sync"
-  description: "Synchronize room lights with the Govee DreamView T1 (H6199) ESP32 sniffer bridge events with ultra-low latency."
+  name: "Peripheral Light Ambilight Sync"
+  description: "Synchronize room peripheral lights with the Govee DreamView T1 (H6199) ESP32 sniffer bridge events with ultra-low latency."
   domain: automation
   input:
     left_light:
-      name: Left Edge Light
+      name: Left Peripheral Light
       description: Smart light entity corresponding to the left side of the TV.
       selector:
         entity:
           filter:
             - domain: light
     center_light:
-      name: Bottom / Center Light
+      name: Bottom / Center Peripheral Light
       description: Smart light entity corresponding to the bottom / dining table / center side.
       selector:
         entity:
           filter:
             - domain: light
     right_light:
-      name: Right Edge Light
+      name: Right Peripheral Light
       description: Smart light entity corresponding to the right side of the TV.
       selector:
         entity:

@@ -1,6 +1,6 @@
-"""Constants for the Govee DreamView Ambilight Bridge integration."""
+"""Constants for the Peripheral Light Ambilight integration."""
 
-DOMAIN = "govee_dreamview_ambilight"
+DOMAIN = "peripheral_light_ambilight"
 
 CONF_LEFT_LIGHT = "left_light"
 CONF_CENTER_LIGHT = "center_light"

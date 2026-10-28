@@ -1,0 +1,17 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Configuración de Peripheral Light Ambilight",
+        "description": "Selecciona las luces periféricas de tu salón para sincronizarlas con cada borde de la cámara de TV Ambilight.",
+        "data": {
+          "left_light": "Luz Periférica Izquierda",
+          "center_light": "Luz Periférica Inferior / Centro",
+          "right_light": "Luz Periférica Derecha",
+          "ceiling_light": "Luz Periférica de Techo (Opcional)",
+          "transition": "Velocidad de Transición (segundos)"
+        }
+      }
+    }
+  }
+}

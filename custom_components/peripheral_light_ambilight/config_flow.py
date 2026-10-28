@@ -1,4 +1,4 @@
-"""Config flow for Govee DreamView Ambilight Bridge integration."""
+"""Config flow for Peripheral Light Ambilight integration."""
 from __future__ import annotations
 
 from typing import Any
@@ -19,8 +19,8 @@ from .const import (
 )
 
 
-class GoveeAmbilightConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
-    """Handle a config flow for Govee DreamView Ambilight Bridge."""
+class PeripheralLightAmbilightConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
+    """Handle a config flow for Peripheral Light Ambilight."""
 
     VERSION = 1
 
@@ -32,7 +32,7 @@ class GoveeAmbilightConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         if user_input is not None:
             return self.async_create_entry(
-                title="Govee DreamView Ambilight",
+                title="Peripheral Light Ambilight",
                 data=user_input,
             )
 
