@@ -251,15 +251,6 @@ Any smart light integrated into Home Assistant that supports RGB color changing 
 
 ---
 
-## 🏷️ GitHub SEO Topics / Tags
-When setting up the repository on GitHub, add these topics under the **About ⚙️** section:
-
-```text
-home-assistant, hacs, hacs-integration, ambilight, govee, govee-dreamview, govee-h6199, esp32, esphome, ws2811, smart-home, ambient-lighting, room-lighting, iot, reverse-engineering, philips-hue-alternative
-```
-
----
-
 ## ☕ Support the Project
 
 If this project enhanced your Home Assistant ambient lighting experience, consider supporting ongoing development:
