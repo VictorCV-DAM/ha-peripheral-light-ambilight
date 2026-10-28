@@ -174,7 +174,8 @@ number:
 
 script:
   - id: enviar_color_ha
-    mode: restart
+    mode: parallel
+    max_runs: 10
     parameters:
       entidad: string
       r: int
