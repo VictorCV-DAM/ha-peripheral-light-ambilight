@@ -448,3 +448,12 @@ interval:
               pSupR = fSupR; pSupG = fSupG; pSupB = fSupB;
             }
           }
+
+          // Log de diagnóstico periódico cada 2 segundos en la consola de ESPHome
+          static uint32_t tUltimoLog = 0;
+          uint32_t tAhora = millis();
+          if (tAhora - tUltimoLog >= 2000) {
+            ESP_LOGI("ambilight", "Govee Activo: %d LEDs | IZQ(%d,%d,%d) | CEN(%d,%d,%d) | DER(%d,%d,%d)",
+                     ledsLeidos, fIzqR, fIzqG, fIzqB, fCenR, fCenG, fCenB, fDerR, fDerG, fDerB);
+            tUltimoLog = tAhora;
+          }

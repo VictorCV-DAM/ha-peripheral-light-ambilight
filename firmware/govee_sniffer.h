@@ -12,75 +12,80 @@ static portMUX_TYPE goveeMutex = portMUX_INITIALIZER_UNLOCKED;
 
 // Ejecuta 100% en SRAM interna (IRAM) - Cero fallos de caché, cero jitter
 IRAM_ATTR inline int capture_govee_frame(uint8_t *ledData, int maxLeds) {
-    // 1. Esperar silencio inter-trama en BAJO (>240000 ciclos = 1.5ms) CON INTERRUPCIONES ACTIVAS
-    // Permite que la pila Wi-Fi, la API de Home Assistant y FreeRTOS respondan al instante sin pérdidas de paquetes
+    // 1. Esperar silencio inter-trama de RESET (>30us en nivel bajo = 4800 ciclos a 160MHz)
+    // Se ejecuta con interrupciones activas y timeout corto (20ms) para no bloquear FreeRTOS ni WiFi
     uint32_t tSearchStart = esp_cpu_get_cycle_count();
-    bool inReset = false;
+    bool inResetSilence = false;
 
-    // Buscar reset durante máx 40ms (6.4 millones de ciclos a 160MHz)
-    while (esp_cpu_get_cycle_count() - tSearchStart < 6400000) {
+    // 20ms a 160MHz = 3.200.000 ciclos
+    while (esp_cpu_get_cycle_count() - tSearchStart < 3200000) {
         if (!(*GOVEE_GPIO_IN & GOVEE_PIN_MASK)) {
             uint32_t tLowStart = esp_cpu_get_cycle_count();
             while (!(*GOVEE_GPIO_IN & GOVEE_PIN_MASK)) {
-                if (esp_cpu_get_cycle_count() - tLowStart > 240000) {
-                    inReset = true;
+                if (esp_cpu_get_cycle_count() - tLowStart > 4800) { // >30 µs
+                    inResetSilence = true;
                     break;
                 }
             }
-            if (inReset) break;
+            if (inResetSilence) break;
         }
     }
 
-    if (!inReset) return 0;
+    if (!inResetSilence) return 0;
 
-    // Entramos en sección crítica mientras el pin TODAVÍA está en nivel BAJO de reset
-    // Bloquea interrupciones ÚNICAMENTE durante los ~1.1 ms de lectura de los 36 LEDs
+    // 2. Sección Crítica: ya estamos dentro del silencio de reset
+    // Bloquea interrupciones ÚNICAMENTE durante los ~1 ms de captura de los LEDs
     taskENTER_CRITICAL(&goveeMutex);
 
-    int ledsRead = 0;
-    bool frameDone = false;
+    // Esperar al flanco de subida que marca el inicio del nuevo fotograma
+    uint32_t tWaitRise = esp_cpu_get_cycle_count();
+    while (!(*GOVEE_GPIO_IN & GOVEE_PIN_MASK)) {
+        if (esp_cpu_get_cycle_count() - tWaitRise > 320000) { // máx 2ms
+            taskEXIT_CRITICAL(&goveeMutex);
+            return 0;
+        }
+    }
 
-    // 2. Muestreo de bits por punto medio (mid-point sampling a 90 ciclos = 560ns)
+    // 3. Captura precisa bit a bit por ancho de pulso
+    int ledsRead = 0;
+    bool streamDone = false;
+
     for (int i = 0; i < maxLeds; i++) {
-        for (int c = 0; c < 3; c++) {
+        for (int colorByte = 0; colorByte < 3; colorByte++) {
             uint8_t byteVal = 0;
             for (int bit = 7; bit >= 0; bit--) {
-                // A. Esperar flanco de subida (0 -> 1)
-                uint32_t tWaitRise = esp_cpu_get_cycle_count();
-                while (!(*GOVEE_GPIO_IN & GOVEE_PIN_MASK)) {
-                    if (esp_cpu_get_cycle_count() - tWaitRise > 200000) {
-                        frameDone = true;
+                // Medir duración del nivel ALTO
+                uint32_t tStartHigh = esp_cpu_get_cycle_count();
+                while (*GOVEE_GPIO_IN & GOVEE_PIN_MASK) {
+                    if (esp_cpu_get_cycle_count() - tStartHigh > 2500) {
+                        streamDone = true;
                         break;
                     }
                 }
-                if (frameDone) break;
+                if (streamDone) break;
 
-                uint32_t tRise = esp_cpu_get_cycle_count();
+                uint32_t highCycles = esp_cpu_get_cycle_count() - tStartHigh;
 
-                // B. Esperar exactamente al punto medio del bit (90 ciclos = 560ns)
-                // Bit 0 dura ~350ns en alto (a 560ns ya cayó a 0)
-                // Bit 1 dura ~900ns en alto (a 560ns sigue en 1)
-                while (esp_cpu_get_cycle_count() - tRise < 90);
-
-                // C. Muestrear el pin en el punto medio
-                if (*GOVEE_GPIO_IN & GOVEE_PIN_MASK) {
+                // Bit 0 ~ 58 ciclos (360ns), Bit 1 ~ 135 ciclos (840ns) -> Umbral: 95 ciclos (590ns)
+                if (highCycles > 95) {
                     byteVal |= (1 << bit);
                 }
 
-                // D. Esperar a que el pin vuelva a nivel BAJO
-                uint32_t tWaitFall = esp_cpu_get_cycle_count();
-                while (*GOVEE_GPIO_IN & GOVEE_PIN_MASK) {
-                    if (esp_cpu_get_cycle_count() - tWaitFall > 2500) {
-                        frameDone = true;
+                // Esperar al flanco de subida del siguiente bit
+                // Si el nivel bajo dura más de 20us (3200 ciclos), fin de la transmisión
+                uint32_t tWaitNext = esp_cpu_get_cycle_count();
+                while (!(*GOVEE_GPIO_IN & GOVEE_PIN_MASK)) {
+                    if (esp_cpu_get_cycle_count() - tWaitNext > 3200) {
+                        streamDone = true;
                         break;
                     }
                 }
-                if (frameDone) break;
+                if (streamDone) break;
             }
-            if (frameDone) break;
-            ledData[i * 3 + c] = byteVal;
+            if (streamDone) break;
+            ledData[i * 3 + colorByte] = byteVal;
         }
-        if (frameDone) break;
+        if (streamDone) break;
         ledsRead++;
     }
 
