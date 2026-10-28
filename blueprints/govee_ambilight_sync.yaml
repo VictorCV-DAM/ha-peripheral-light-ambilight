@@ -1,0 +1,111 @@
+blueprint:
+  name: "Govee DreamView Ambilight Sync"
+  description: "Synchronize room lights with the Govee DreamView T1 (H6199) ESP32 sniffer bridge events with ultra-low latency."
+  domain: automation
+  input:
+    left_light:
+      name: Left Edge Light
+      description: Smart light entity corresponding to the left side of the TV.
+      selector:
+        entity:
+          filter:
+            - domain: light
+    center_light:
+      name: Bottom / Center Light
+      description: Smart light entity corresponding to the bottom / dining table / center side.
+      selector:
+        entity:
+          filter:
+            - domain: light
+    right_light:
+      name: Right Edge Light
+      description: Smart light entity corresponding to the right side of the TV.
+      selector:
+        entity:
+          filter:
+            - domain: light
+    ceiling_light:
+      name: Optional Ceiling / Top Light
+      description: Smart light entity corresponding to the top edge (ceiling). Leave empty if not used.
+      default: []
+      selector:
+        entity:
+          filter:
+            - domain: light
+    transition_time:
+      name: Transition Time (seconds)
+      description: Smooth transition between color updates (recommended 0.1s to 0.3s).
+      default: 0.15
+      selector:
+        number:
+          min: 0.0
+          max: 1.0
+          step: 0.05
+          unit_of_measurement: s
+
+mode: parallel
+max: 20
+
+trigger:
+  - platform: event
+    event_type: esphome.ambilight_color
+
+action:
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ trigger.event.data.entity_id == 'light.comedor_luces_izquierda' }}"
+        sequence:
+          - service: light.turn_on
+            target:
+              entity_id: !input left_light
+            data:
+              rgb_color:
+                - "{{ trigger.event.data.r | int }}"
+                - "{{ trigger.event.data.g | int }}"
+                - "{{ trigger.event.data.b | int }}"
+              transition: !input transition_time
+
+      - conditions:
+          - condition: template
+            value_template: "{{ trigger.event.data.entity_id == 'light.comedor_luces_centro' }}"
+        sequence:
+          - service: light.turn_on
+            target:
+              entity_id: !input center_light
+            data:
+              rgb_color:
+                - "{{ trigger.event.data.r | int }}"
+                - "{{ trigger.event.data.g | int }}"
+                - "{{ trigger.event.data.b | int }}"
+              transition: !input transition_time
+
+      - conditions:
+          - condition: template
+            value_template: "{{ trigger.event.data.entity_id == 'light.comedor_luces_derecha' }}"
+        sequence:
+          - service: light.turn_on
+            target:
+              entity_id: !input right_light
+            data:
+              rgb_color:
+                - "{{ trigger.event.data.r | int }}"
+                - "{{ trigger.event.data.g | int }}"
+                - "{{ trigger.event.data.b | int }}"
+              transition: !input transition_time
+
+      - conditions:
+          - condition: template
+            value_template: "{{ trigger.event.data.entity_id == 'light.comedor_luces_techo' and trigger.event.data.entity_id != '' }}"
+        sequence:
+          - condition: template
+            value_template: "{{ input.ceiling_light != [] and input.ceiling_light != '' }}"
+          - service: light.turn_on
+            target:
+              entity_id: !input ceiling_light
+            data:
+              rgb_color:
+                - "{{ trigger.event.data.r | int }}"
+                - "{{ trigger.event.data.g | int }}"
+                - "{{ trigger.event.data.b | int }}"
+              transition: !input transition_time

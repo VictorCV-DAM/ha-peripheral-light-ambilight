@@ -1,0 +1,17 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Configuración Govee DreamView Ambilight",
+        "description": "Selecciona las luces inteligentes de tu salón que se sincronizarán con cada zona de la cámara de TV Govee DreamView T1.",
+        "data": {
+          "left_light": "Luz Lateral Izquierda",
+          "center_light": "Luz Borde Inferior / Centro / Mesa",
+          "right_light": "Luz Lateral Derecha",
+          "ceiling_light": "Luz de Techo (Opcional)",
+          "transition": "Velocidad de Transición (segundos)"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Govee DreamView Ambilight Setup",
+        "description": "Select the smart light entities in your room that will synchronize with each zone of the Govee DreamView T1 TV camera.",
+        "data": {
+          "left_light": "Left Light Entity",
+          "center_light": "Bottom / Center Light Entity",
+          "right_light": "Right Light Entity",
+          "ceiling_light": "Ceiling Light Entity (Optional)",
+          "transition": "Transition Speed (seconds)"
+        }
+      }
+    }
+  }
+}

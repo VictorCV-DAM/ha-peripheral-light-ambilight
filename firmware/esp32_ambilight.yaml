@@ -1,0 +1,435 @@
+# Board: ESP32-C3 DevKitM-1 (Espressif RISC-V 160MHz)
+# Ultra-Low Latency Govee DreamView T1 (H6199) Hardware Sniffer Bridge
+esphome:
+  name: esp32-ambilight-bridge
+  friendly_name: Govee DreamView Ambilight Bridge
+  includes:
+    - govee_sniffer.h
+
+esp32:
+  board: esp32-c3-devkitm-1
+  variant: esp32c3
+  flash_size: 4MB
+  framework:
+    type: esp-idf
+
+logger:
+  hardware_uart: USB_SERIAL_JTAG
+  level: INFO
+
+api:
+  encryption:
+    key: !secret api_encryption_key
+
+ota:
+  - platform: esphome
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  power_save_mode: none
+  manual_ip:
+    static_ip: !secret static_ip
+    gateway: !secret gateway_ip
+    subnet: 255.255.255.0
+    dns1: !secret dns_ip
+
+binary_sensor:
+  - platform: gpio
+    pin:
+      number: GPIO3
+      mode:
+        input: true
+    id: pin_datos
+    internal: true
+
+globals:
+  - id: test_en_curso
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+
+switch:
+  - platform: template
+    name: "Ambilight Mode"
+    id: modo_ambilight
+    icon: "mdi:television-ambient-light"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+    on_turn_on:
+      - lambda: |-
+          id(modo_luces).publish_state("Ambilight");
+    on_turn_off:
+      - lambda: |-
+          id(modo_luces).publish_state("Custom");
+
+  - platform: template
+    name: "Invert Rotation Direction"
+    id: invertir_sentido
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+
+  - platform: template
+    name: "Enable Ceiling Light (Top Edge)"
+    id: activar_techo
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+
+select:
+  - platform: template
+    name: "Mode Selector"
+    id: modo_luces
+    icon: "mdi:tune-variant"
+    options:
+      - "Ambilight"
+      - "Custom"
+    initial_option: "Ambilight"
+    optimistic: true
+    restore_value: true
+    set_action:
+      - lambda: |-
+          if (x == "Ambilight") {
+            id(modo_ambilight).publish_state(true);
+          } else {
+            id(modo_ambilight).publish_state(false);
+          }
+
+number:
+  # Explicit sliders for granular control
+  - platform: template
+    name: "360° Rotation"
+    id: rotacion_offset
+    unit_of_measurement: "°"
+    icon: "mdi:rotate-360"
+    min_value: -180
+    max_value: 180
+    step: 1
+    initial_value: 0
+    mode: slider
+    optimistic: true
+    restore_value: true
+
+  - platform: template
+    name: "Left Edge LEDs"
+    id: num_leds_izq
+    min_value: 4
+    max_value: 12
+    step: 1
+    initial_value: 7
+    mode: slider
+    optimistic: true
+    restore_value: true
+
+  - platform: template
+    name: "Top Edge LEDs (Ceiling)"
+    id: num_leds_sup
+    min_value: 6
+    max_value: 16
+    step: 1
+    initial_value: 11
+    mode: slider
+    optimistic: true
+    restore_value: true
+
+  - platform: template
+    name: "Right Edge LEDs"
+    id: num_leds_der
+    min_value: 4
+    max_value: 12
+    step: 1
+    initial_value: 7
+    mode: slider
+    optimistic: true
+    restore_value: true
+
+  - platform: template
+    name: "Bottom Edge LEDs (Center)"
+    id: num_leds_inf
+    min_value: 6
+    max_value: 16
+    step: 1
+    initial_value: 11
+    mode: slider
+    optimistic: true
+    restore_value: true
+
+script:
+  - id: enviar_color_ha
+    mode: restart
+    parameters:
+      entidad: string
+      r: int
+      g: int
+      b: int
+    then:
+      - homeassistant.service:
+          service: light.turn_on
+          data:
+            entity_id: !lambda "return entidad;"
+          data_template:
+            transition: "0.1"
+            rgb_color: !lambda 'return "[" + std::to_string(r) + "," + std::to_string(g) + "," + std::to_string(b) + "]";'
+      - homeassistant.event:
+          event: esphome.ambilight_color
+          data:
+            entity_id: !lambda "return entidad;"
+            r: !lambda "return std::to_string(r);"
+            g: !lambda "return std::to_string(g);"
+            b: !lambda "return std::to_string(b);"
+
+  - id: ciclo_test_luces
+    mode: restart
+    then:
+      - lambda: 'id(test_en_curso) = true;'
+      # Step 1: Left Red, Center Green, Right Blue (Ceiling White)
+      - script.execute:
+          id: enviar_color_ha
+          entidad: "light.comedor_luces_izquierda"
+          r: 255
+          g: 0
+          b: 0
+      - script.execute:
+          id: enviar_color_ha
+          entidad: "light.comedor_luces_centro"
+          r: 0
+          g: 255
+          b: 0
+      - script.execute:
+          id: enviar_color_ha
+          entidad: "light.comedor_luces_derecha"
+          r: 0
+          g: 0
+          b: 255
+      - if:
+          condition:
+            lambda: 'return id(activar_techo).state;'
+          then:
+            - script.execute:
+                id: enviar_color_ha
+                entidad: "light.comedor_luces_techo"
+                r: 255
+                g: 255
+                b: 255
+      - delay: 2s
+
+      # Step 2: Left Green, Center Blue, Right Red (Ceiling Yellow)
+      - script.execute:
+          id: enviar_color_ha
+          entidad: "light.comedor_luces_izquierda"
+          r: 0
+          g: 255
+          b: 0
+      - script.execute:
+          id: enviar_color_ha
+          entidad: "light.comedor_luces_centro"
+          r: 0
+          g: 0
+          b: 255
+      - script.execute:
+          id: enviar_color_ha
+          entidad: "light.comedor_luces_derecha"
+          r: 255
+          g: 0
+          b: 0
+      - if:
+          condition:
+            lambda: 'return id(activar_techo).state;'
+          then:
+            - script.execute:
+                id: enviar_color_ha
+                entidad: "light.comedor_luces_techo"
+                r: 255
+                g: 255
+                b: 0
+      - delay: 2s
+
+      # Step 3: Left Blue, Center Red, Right Green (Ceiling Cyan)
+      - script.execute:
+          id: enviar_color_ha
+          entidad: "light.comedor_luces_izquierda"
+          r: 0
+          g: 0
+          b: 255
+      - script.execute:
+          id: enviar_color_ha
+          entidad: "light.comedor_luces_centro"
+          r: 255
+          g: 0
+          b: 0
+      - script.execute:
+          id: enviar_color_ha
+          entidad: "light.comedor_luces_derecha"
+          r: 0
+          g: 255
+          b: 0
+      - if:
+          condition:
+            lambda: 'return id(activar_techo).state;'
+          then:
+            - script.execute:
+                id: enviar_color_ha
+                entidad: "light.comedor_luces_techo"
+                r: 0
+                g: 255
+                b: 255
+      - delay: 2s
+      - lambda: 'id(test_en_curso) = false;'
+
+button:
+  - platform: template
+    name: "Test RGB Sequence"
+    icon: "mdi:palette-swatch-outline"
+    on_press:
+      - script.execute: ciclo_test_luces
+
+interval:
+  - interval: 40ms
+    then:
+      - lambda: |-
+          // Static buffers for temporal smoothing & hysteresis
+          static int fIzqR = -1, fIzqG = -1, fIzqB = -1;
+          static int fSupR = -1, fSupG = -1, fSupB = -1;
+          static int fCenR = -1, fCenG = -1, fCenB = -1;
+          static int fDerR = -1, fDerG = -1, fDerB = -1;
+
+          static int pIzqR = -1, pIzqG = -1, pIzqB = -1;
+          static int pSupR = -1, pSupG = -1, pSupB = -1;
+          static int pCenR = -1, pCenG = -1, pCenB = -1;
+          static int pDerR = -1, pDerG = -1, pDerB = -1;
+
+          // If in Custom / Paused mode or running RGB test, do not overwrite lights
+          if (id(test_en_curso) || !id(modo_ambilight).state) {
+            fIzqR = -1; fSupR = -1; fCenR = -1; fDerR = -1;
+            pIzqR = -1; pSupR = -1; pCenR = -1; pDerR = -1;
+            return;
+          }
+
+          static portMUX_TYPE myMutex = portMUX_INITIALIZER_UNLOCKED;
+
+          const int MAX_LEDS = 38;
+          uint8_t ledData[MAX_LEDS * 3] = {0};
+
+          taskENTER_CRITICAL(&myMutex);
+          int ledsLeidos = capture_govee_frame(ledData, MAX_LEDS);
+          taskEXIT_CRITICAL(&myMutex);
+
+          if (ledsLeidos < 30) return;
+
+          float rotDeg = id(rotacion_offset).state;
+          int offset = (int)roundf(rotDeg * 36.0f / 360.0f);
+          bool invert = id(invertir_sentido).state;
+          int nIzq = (int)id(num_leds_izq).state;
+          int nSup = (int)id(num_leds_sup).state;
+          int nDer = (int)id(num_leds_der).state;
+          int nInf = (int)id(num_leds_inf).state;
+
+          const int TOTAL_LEDS_LOOP = 36;
+
+          auto getLedIndex = [&](int virtualPos) -> int {
+            int pos = virtualPos % TOTAL_LEDS_LOOP;
+            if (invert) {
+              pos = (TOTAL_LEDS_LOOP * 10 + offset - pos) % TOTAL_LEDS_LOOP;
+            } else {
+              pos = (TOTAL_LEDS_LOOP * 10 + pos + offset) % TOTAL_LEDS_LOOP;
+            }
+            return 1 + pos;
+          };
+
+          // A. Left Zone (Left Edge)
+          long sR_izq = 0, sG_izq = 0, sB_izq = 0;
+          for (int i = 0; i < nIzq; i++) {
+            int k = getLedIndex(i);
+            sG_izq += ledData[k * 3];
+            sR_izq += ledData[k * 3 + 1];
+            sB_izq += ledData[k * 3 + 2];
+          }
+          int izqR = sR_izq / nIzq;
+          int izqG = sG_izq / nIzq;
+          int izqB = sB_izq / nIzq;
+
+          // B. Ceiling Zone (Top Edge)
+          int startSupVirt = nIzq;
+          long sR_sup = 0, sG_sup = 0, sB_sup = 0;
+          for (int i = startSupVirt; i < startSupVirt + nSup; i++) {
+            int k = getLedIndex(i);
+            sG_sup += ledData[k * 3];
+            sR_sup += ledData[k * 3 + 1];
+            sB_sup += ledData[k * 3 + 2];
+          }
+          int supR = (nSup > 0) ? (sR_sup / nSup) : 0;
+          int supG = (nSup > 0) ? (sG_sup / nSup) : 0;
+          int supB = (nSup > 0) ? (sB_sup / nSup) : 0;
+
+          // C. Right Zone (Right Edge)
+          int startDerVirt = nIzq + nSup;
+          long sR_der = 0, sG_der = 0, sB_der = 0;
+          for (int i = startDerVirt; i < startDerVirt + nDer; i++) {
+            int k = getLedIndex(i);
+            sG_der += ledData[k * 3];
+            sR_der += ledData[k * 3 + 1];
+            sB_der += ledData[k * 3 + 2];
+          }
+          int derR = sR_der / nDer;
+          int derG = sG_der / nDer;
+          int derB = sB_der / nDer;
+
+          // D. Center / Table Zone (Bottom Edge)
+          int startInfVirt = startDerVirt + nDer;
+          if (nInf < 1) nInf = 1;
+
+          long sR_cen = 0, sG_cen = 0, sB_cen = 0;
+          for (int i = startInfVirt; i < startInfVirt + nInf; i++) {
+            int k = getLedIndex(i);
+            sG_cen += ledData[k * 3];
+            sR_cen += ledData[k * 3 + 1];
+            sB_cen += ledData[k * 3 + 2];
+          }
+          int cenR = sR_cen / nInf;
+          int cenG = sG_cen / nInf;
+          int cenB = sB_cen / nInf;
+
+          // 70/30 IIR Temporal Smoothing Filter
+          if (fIzqR < 0) {
+            fIzqR = izqR; fIzqG = izqG; fIzqB = izqB;
+            fSupR = supR; fSupG = supG; fSupB = supB;
+            fCenR = cenR; fCenG = cenG; fCenB = cenB;
+            fDerR = derR; fDerG = derG; fDerB = derB;
+          } else {
+            fIzqR = (fIzqR * 7 + izqR * 3) / 10;
+            fIzqG = (fIzqG * 7 + izqG * 3) / 10;
+            fIzqB = (fIzqB * 7 + izqB * 3) / 10;
+
+            fSupR = (fSupR * 7 + supR * 3) / 10;
+            fSupG = (fSupG * 7 + supG * 3) / 10;
+            fSupB = (fSupB * 7 + supB * 3) / 10;
+
+            fCenR = (fCenR * 7 + cenR * 3) / 10;
+            fCenG = (fCenG * 7 + cenG * 3) / 10;
+            fCenB = (fCenB * 7 + cenB * 3) / 10;
+
+            fDerR = (fDerR * 7 + derR * 3) / 10;
+            fDerG = (fDerG * 7 + derG * 3) / 10;
+            fDerB = (fDerB * 7 + derB * 3) / 10;
+          }
+
+          // 8-Point Hysteresis: Only dispatch commands when delta exceeds noise threshold
+          if (abs(fIzqR - pIzqR) >= 8 || abs(fIzqG - pIzqG) >= 8 || abs(fIzqB - pIzqB) >= 8) {
+            id(enviar_color_ha)->execute("light.comedor_luces_izquierda", fIzqR, fIzqG, fIzqB);
+            pIzqR = fIzqR; pIzqG = fIzqG; pIzqB = fIzqB;
+          }
+          if (abs(fDerR - pDerR) >= 8 || abs(fDerG - pDerG) >= 8 || abs(fDerB - pDerB) >= 8) {
+            id(enviar_color_ha)->execute("light.comedor_luces_derecha", fDerR, fDerG, fDerB);
+            pDerR = fDerR; pDerG = fDerG; pDerB = fDerB;
+          }
+          if (abs(fCenR - pCenR) >= 8 || abs(fCenG - pCenG) >= 8 || abs(fCenB - pCenB) >= 8) {
+            id(enviar_color_ha)->execute("light.comedor_luces_centro", fCenR, fCenG, fCenB);
+            pCenR = fCenR; pCenG = fCenG; pCenB = fCenB;
+          }
+
+          // Optional Top Edge (Ceiling Light)
+          if (id(activar_techo).state) {
+            if (abs(fSupR - pSupR) >= 8 || abs(fSupG - pSupG) >= 8 || abs(fSupB - pSupB) >= 8) {
+              id(enviar_color_ha)->execute("light.comedor_luces_techo", fSupR, fSupG, fSupB);
+              pSupR = fSupR; pSupG = fSupG; pSupB = fSupB;
+            }
+          }
