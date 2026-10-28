@@ -182,13 +182,13 @@ script:
       g: int
       b: int
     then:
-      - homeassistant.service:
-          service: light.turn_on
+      - homeassistant.event:
+          event: esphome.ambilight_color
           data:
             entity_id: !lambda "return entidad;"
-          data_template:
-            transition: "0.3"
-            rgb_color: !lambda 'return "[" + std::to_string(r) + "," + std::to_string(g) + "," + std::to_string(b) + "]";'
+            r: !lambda "return std::to_string(r);"
+            g: !lambda "return std::to_string(g);"
+            b: !lambda "return std::to_string(b);"
 
   - id: ciclo_test_luces
     mode: restart
@@ -296,10 +296,10 @@ button:
       - script.execute: ciclo_test_luces
 
 interval:
-  - interval: 80ms
+  - interval: 40ms
     then:
       - lambda: |-
-          // Variables estáticas para filtro IIR e histéresis
+          // Variables estaticas para filtro IIR e histeresis (Exacto de commit 6aa3e61)
           static int fIzqR = -1, fIzqG = -1, fIzqB = -1;
           static int fSupR = -1, fSupG = -1, fSupB = -1;
           static int fCenR = -1, fCenG = -1, fCenB = -1;
@@ -310,23 +310,27 @@ interval:
           static int pCenR = -1, pCenG = -1, pCenB = -1;
           static int pDerR = -1, pDerG = -1, pDerB = -1;
 
-          static uint32_t lastSentIzq = 0;
-          static uint32_t lastSentDer = 0;
-          static uint32_t lastSentCen = 0;
-          static uint32_t lastSentSup = 0;
-
           // Si estamos en modo apagado o test, resetear estados y salir
           if (id(test_en_curso) || !id(modo_ambilight).state) {
             fIzqR = -1; fSupR = -1; fCenR = -1; fDerR = -1;
             pIzqR = -1; pSupR = -1; pCenR = -1; pDerR = -1;
-            lastSentIzq = 0; lastSentDer = 0; lastSentCen = 0; lastSentSup = 0;
             return;
           }
 
           const int MAX_LEDS = 38;
           uint8_t ledData[MAX_LEDS * 3] = {0};
 
+          // Captura con proteccion atomica interna en govee_sniffer.h
           int ledsLeidos = capture_govee_frame(ledData, MAX_LEDS);
+
+          // Log de diagnostico periodico cada 2 segundos
+          static uint32_t tUltimoLog = 0;
+          if (millis() - tUltimoLog >= 2000) {
+            ESP_LOGI("ambilight", "Govee: %d LEDs | RAW0=(R:%d,G:%d,B:%d) | IZQ(%d,%d,%d) CEN(%d,%d,%d) DER(%d,%d,%d)", ledsLeidos, ledData[0], ledData[1], ledData[2], fIzqR, fIzqG, fIzqB, fCenR, fCenG, fCenB, fDerR, fDerG, fDerB);
+
+            tUltimoLog = millis();
+          }
+
           if (ledsLeidos < 30) return;
 
           float rotDeg = id(rotacion_offset).state;
@@ -353,8 +357,8 @@ interval:
           long sR_izq = 0, sG_izq = 0, sB_izq = 0;
           for (int i = 0; i < nIzq; i++) {
             int k = getLedIndex(i);
-            sG_izq += ledData[k * 3];
-            sR_izq += ledData[k * 3 + 1];
+            sR_izq += ledData[k * 3];
+            sG_izq += ledData[k * 3 + 1];
             sB_izq += ledData[k * 3 + 2];
           }
           int izqR = sR_izq / nIzq;
@@ -366,8 +370,8 @@ interval:
           long sR_sup = 0, sG_sup = 0, sB_sup = 0;
           for (int i = startSupVirt; i < startSupVirt + nSup; i++) {
             int k = getLedIndex(i);
-            sG_sup += ledData[k * 3];
-            sR_sup += ledData[k * 3 + 1];
+            sR_sup += ledData[k * 3];
+            sG_sup += ledData[k * 3 + 1];
             sB_sup += ledData[k * 3 + 2];
           }
           int supR = (nSup > 0) ? (sR_sup / nSup) : 0;
@@ -379,8 +383,8 @@ interval:
           long sR_der = 0, sG_der = 0, sB_der = 0;
           for (int i = startDerVirt; i < startDerVirt + nDer; i++) {
             int k = getLedIndex(i);
-            sG_der += ledData[k * 3];
-            sR_der += ledData[k * 3 + 1];
+            sR_der += ledData[k * 3];
+            sG_der += ledData[k * 3 + 1];
             sB_der += ledData[k * 3 + 2];
           }
           int derR = sR_der / nDer;
@@ -394,82 +398,59 @@ interval:
           long sR_cen = 0, sG_cen = 0, sB_cen = 0;
           for (int i = startInfVirt; i < startInfVirt + nInf; i++) {
             int k = getLedIndex(i);
-            sG_cen += ledData[k * 3];
-            sR_cen += ledData[k * 3 + 1];
+            sR_cen += ledData[k * 3];
+            sG_cen += ledData[k * 3 + 1];
             sB_cen += ledData[k * 3 + 2];
           }
           int cenR = sR_cen / nInf;
           int cenG = sG_cen / nInf;
           int cenB = sB_cen / nInf;
 
-          // Filtro IIR de suavizado temporal
+          // Filtro IIR 70/30 de suavizado temporal calibrado de 6aa3e61
           if (fIzqR < 0) {
             fIzqR = izqR; fIzqG = izqG; fIzqB = izqB;
             fSupR = supR; fSupG = supG; fSupB = supB;
             fCenR = cenR; fCenG = cenG; fCenB = cenB;
             fDerR = derR; fDerG = derG; fDerB = derB;
           } else {
-            fIzqR = (fIzqR * 6 + izqR * 4) / 10;
-            fIzqG = (fIzqG * 6 + izqG * 4) / 10;
-            fIzqB = (fIzqB * 6 + izqB * 4) / 10;
+            fIzqR = (fIzqR * 7 + izqR * 3) / 10;
+            fIzqG = (fIzqG * 7 + izqG * 3) / 10;
+            fIzqB = (fIzqB * 7 + izqB * 3) / 10;
 
-            fSupR = (fSupR * 6 + supR * 4) / 10;
-            fSupG = (fSupG * 6 + supG * 4) / 10;
-            fSupB = (fSupB * 6 + supB * 4) / 10;
+            fSupR = (fSupR * 7 + supR * 3) / 10;
+            fSupG = (fSupG * 7 + supG * 3) / 10;
+            fSupB = (fSupB * 7 + supB * 3) / 10;
 
-            fCenR = (fCenR * 6 + cenR * 4) / 10;
-            fCenG = (fCenG * 6 + cenG * 4) / 10;
-            fCenB = (fCenB * 6 + cenB * 4) / 10;
+            fCenR = (fCenR * 7 + cenR * 3) / 10;
+            fCenG = (fCenG * 7 + cenG * 3) / 10;
+            fCenB = (fCenB * 7 + cenB * 3) / 10;
 
-            fDerR = (fDerR * 6 + derR * 4) / 10;
-            fDerG = (fDerG * 6 + derG * 4) / 10;
-            fDerB = (fDerB * 6 + derB * 4) / 10;
+            fDerR = (fDerR * 7 + derR * 3) / 10;
+            fDerG = (fDerG * 7 + derG * 3) / 10;
+            fDerB = (fDerB * 7 + derB * 3) / 10;
           }
 
-          uint32_t tAhora = millis();
-
-          // Histéresis y cadencia adaptativa:
-          // Derecha e Izquierda (Luces WiFi locales + tira): máx 3 actualizaciones/seg (cada 300ms)
-          // Centro (Barra Tuya Cloud): máx 1 actualización/seg (cada 1000ms)
-          const int THRESHOLD_LOCAL = 12;
-          const int THRESHOLD_TUYA = 16;
-
-          if (tAhora - lastSentIzq >= 300) {
-            if (pIzqR < 0 || abs(fIzqR - pIzqR) >= THRESHOLD_LOCAL || abs(fIzqG - pIzqG) >= THRESHOLD_LOCAL || abs(fIzqB - pIzqB) >= THRESHOLD_LOCAL) {
-              id(enviar_color_ha)->execute("light.comedor_luces_izquierda", fIzqR, fIzqG, fIzqB);
-              pIzqR = fIzqR; pIzqG = fIzqG; pIzqB = fIzqB;
-              lastSentIzq = tAhora;
-            }
+          // Histeresis de 8 puntos calibrada de commit 6aa3e61
+          if (abs(fIzqR - pIzqR) >= 8 || abs(fIzqG - pIzqG) >= 8 || abs(fIzqB - pIzqB) >= 8) {
+            id(enviar_color_ha)->execute("light.comedor_luces_izquierda", fIzqR, fIzqG, fIzqB);
+            pIzqR = fIzqR; pIzqG = fIzqG; pIzqB = fIzqB;
           }
 
-          if (tAhora - lastSentDer >= 300) {
-            if (pDerR < 0 || abs(fDerR - pDerR) >= THRESHOLD_LOCAL || abs(fDerG - pDerG) >= THRESHOLD_LOCAL || abs(fDerB - pDerB) >= THRESHOLD_LOCAL) {
-              id(enviar_color_ha)->execute("light.comedor_luces_derecha", fDerR, fDerG, fDerB);
-              pDerR = fDerR; pDerG = fDerG; pDerB = fDerB;
-              lastSentDer = tAhora;
-            }
+          if (abs(fDerR - pDerR) >= 8 || abs(fDerG - pDerG) >= 8 || abs(fDerB - pDerB) >= 8) {
+            id(enviar_color_ha)->execute("light.comedor_luces_derecha", fDerR, fDerG, fDerB);
+            pDerR = fDerR; pDerG = fDerG; pDerB = fDerB;
           }
 
-          if (tAhora - lastSentCen >= 1000) {
-            if (pCenR < 0 || abs(fCenR - pCenR) >= THRESHOLD_TUYA || abs(fCenG - pCenG) >= THRESHOLD_TUYA || abs(fCenB - pCenB) >= THRESHOLD_TUYA) {
-              id(enviar_color_ha)->execute("light.comedor_luces_centro", fCenR, fCenG, fCenB);
-              pCenR = fCenR; pCenG = fCenG; pCenB = fCenB;
-              lastSentCen = tAhora;
-            }
+          if (abs(fCenR - pCenR) >= 8 || abs(fCenG - pCenG) >= 8 || abs(fCenB - pCenB) >= 8) {
+            id(enviar_color_ha)->execute("light.comedor_luces_centro", fCenR, fCenG, fCenB);
+            pCenR = fCenR; pCenG = fCenG; pCenB = fCenB;
           }
 
-          if (id(activar_techo).state && (tAhora - lastSentSup >= 300)) {
-            if (pSupR < 0 || abs(fSupR - pSupR) >= THRESHOLD_LOCAL || abs(fSupG - pSupG) >= THRESHOLD_LOCAL || abs(fSupB - pSupB) >= THRESHOLD_LOCAL) {
+          if (id(activar_techo).state) {
+            if (abs(fSupR - pSupR) >= 8 || abs(fSupG - pSupG) >= 8 || abs(fSupB - pSupB) >= 8) {
               id(enviar_color_ha)->execute("light.comedor_luces_techo", fSupR, fSupG, fSupB);
               pSupR = fSupR; pSupG = fSupG; pSupB = fSupB;
-              lastSentSup = tAhora;
             }
           }
 
-          // Log de diagnóstico periódico cada 3 segundos
-          static uint32_t tUltimoLog = 0;
-          if (tAhora - tUltimoLog >= 3000) {
-            ESP_LOGI("ambilight", "Govee Activo: %d LEDs | IZQ(%d,%d,%d) | CEN(%d,%d,%d) | DER(%d,%d,%d)",
-                     ledsLeidos, fIzqR, fIzqG, fIzqB, fCenR, fCenG, fCenB, fDerR, fDerG, fDerB);
-            tUltimoLog = tAhora;
-          }
+
