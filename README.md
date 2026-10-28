@@ -7,7 +7,6 @@
   [![Home Assistant](https://img.shields.io/badge/Home%20Assistant-2024.1.0%2B-41BDF5.svg?logo=home-assistant)](https://www.home-assistant.io/)
   [![GitHub Release](https://img.shields.io/github/v/release/VictorCV-DAM/ha-peripheral-light-ambilight)](https://github.com/VictorCV-DAM/ha-peripheral-light-ambilight/releases)
   [![Total Downloads](https://img.shields.io/github/downloads/VictorCV-DAM/ha-peripheral-light-ambilight/total.svg?color=brightgreen)](https://github.com/VictorCV-DAM/ha-peripheral-light-ambilight/releases)
-  [![Release Downloads](https://img.shields.io/github/downloads/VictorCV-DAM/ha-peripheral-light-ambilight/latest/total.svg?color=blue)](https://github.com/VictorCV-DAM/ha-peripheral-light-ambilight/releases)
   [![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](LICENSE)
   [![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-Donate-orange?logo=buy-me-a-coffee)](https://buymeacoffee.com/VictorCV)
   [![PayPal](https://img.shields.io/badge/PayPal-Donate-blue?logo=paypal)](https://paypal.me/victorcava)
@@ -122,7 +121,6 @@ You do **not** need to cut wires, strip insulation, or solder anything. The conn
 Click the My Home Assistant badge below to open this repository directly inside your Home Assistant HACS store, then click **Download**:
 
 [![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=VictorCV-DAM&repository=ha-peripheral-light-ambilight&category=integration)
-[![ZIP Downloads](https://img.shields.io/github/downloads/VictorCV-DAM/ha-peripheral-light-ambilight/latest/peripheral_light_ambilight.zip?label=ZIP%20Downloads&color=brightgreen&logo=github)](https://github.com/VictorCV-DAM/ha-peripheral-light-ambilight/releases/latest/download/peripheral_light_ambilight.zip)
 
 #### 🔍 Manual Install via HACS
 1. Open **HACS** in Home Assistant $\rightarrow$ **Integrations**.
