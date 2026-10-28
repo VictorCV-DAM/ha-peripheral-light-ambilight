@@ -62,15 +62,15 @@ switch:
       - lambda: |-
           id(modo_luces).publish_state("Custom");
       - homeassistant.service:
-          service: light.turn_off
+          service: homeassistant.turn_off
           data:
             entity_id: "light.comedor_luces_izquierda"
       - homeassistant.service:
-          service: light.turn_off
+          service: homeassistant.turn_off
           data:
             entity_id: "light.comedor_luces_centro"
       - homeassistant.service:
-          service: light.turn_off
+          service: homeassistant.turn_off
           data:
             entity_id: "light.comedor_luces_derecha"
       - if:
@@ -78,7 +78,7 @@ switch:
             lambda: 'return id(activar_techo).state;'
           then:
             - homeassistant.service:
-                service: light.turn_off
+                service: homeassistant.turn_off
                 data:
                   entity_id: "light.comedor_luces_techo"
 
@@ -187,15 +187,8 @@ script:
           data:
             entity_id: !lambda "return entidad;"
           data_template:
-            transition: "0.1"
+            transition: "0.3"
             rgb_color: !lambda 'return "[" + std::to_string(r) + "," + std::to_string(g) + "," + std::to_string(b) + "]";'
-      - homeassistant.event:
-          event: esphome.ambilight_color
-          data:
-            entity_id: !lambda "return entidad;"
-            r: !lambda "return std::to_string(r);"
-            g: !lambda "return std::to_string(g);"
-            b: !lambda "return std::to_string(b);"
 
   - id: ciclo_test_luces
     mode: restart
@@ -303,7 +296,7 @@ button:
       - script.execute: ciclo_test_luces
 
 interval:
-  - interval: 40ms
+  - interval: 80ms
     then:
       - lambda: |-
           // Variables estáticas para filtro IIR e histéresis
@@ -317,10 +310,16 @@ interval:
           static int pCenR = -1, pCenG = -1, pCenB = -1;
           static int pDerR = -1, pDerG = -1, pDerB = -1;
 
-          // Si estamos en medio del ciclo de prueba o en modo manual/pausa, no enviamos nada
+          static uint32_t lastSentIzq = 0;
+          static uint32_t lastSentDer = 0;
+          static uint32_t lastSentCen = 0;
+          static uint32_t lastSentSup = 0;
+
+          // Si estamos en modo apagado o test, resetear estados y salir
           if (id(test_en_curso) || !id(modo_ambilight).state) {
             fIzqR = -1; fSupR = -1; fCenR = -1; fDerR = -1;
             pIzqR = -1; pSupR = -1; pCenR = -1; pDerR = -1;
+            lastSentIzq = 0; lastSentDer = 0; lastSentCen = 0; lastSentSup = 0;
             return;
           }
 
@@ -328,7 +327,6 @@ interval:
           uint8_t ledData[MAX_LEDS * 3] = {0};
 
           int ledsLeidos = capture_govee_frame(ledData, MAX_LEDS);
-
           if (ledsLeidos < 30) return;
 
           float rotDeg = id(rotacion_offset).state;
@@ -411,49 +409,66 @@ interval:
             fCenR = cenR; fCenG = cenG; fCenB = cenB;
             fDerR = derR; fDerG = derG; fDerB = derB;
           } else {
-            fIzqR = (fIzqR * 7 + izqR * 3) / 10;
-            fIzqG = (fIzqG * 7 + izqG * 3) / 10;
-            fIzqB = (fIzqB * 7 + izqB * 3) / 10;
+            fIzqR = (fIzqR * 6 + izqR * 4) / 10;
+            fIzqG = (fIzqG * 6 + izqG * 4) / 10;
+            fIzqB = (fIzqB * 6 + izqB * 4) / 10;
 
-            fSupR = (fSupR * 7 + supR * 3) / 10;
-            fSupG = (fSupG * 7 + supG * 3) / 10;
-            fSupB = (fSupB * 7 + supB * 3) / 10;
+            fSupR = (fSupR * 6 + supR * 4) / 10;
+            fSupG = (fSupG * 6 + supG * 4) / 10;
+            fSupB = (fSupB * 6 + supB * 4) / 10;
 
-            fCenR = (fCenR * 7 + cenR * 3) / 10;
-            fCenG = (fCenG * 7 + cenG * 3) / 10;
-            fCenB = (fCenB * 7 + cenB * 3) / 10;
+            fCenR = (fCenR * 6 + cenR * 4) / 10;
+            fCenG = (fCenG * 6 + cenG * 4) / 10;
+            fCenB = (fCenB * 6 + cenB * 4) / 10;
 
-            fDerR = (fDerR * 7 + derR * 3) / 10;
-            fDerG = (fDerG * 7 + derG * 3) / 10;
-            fDerB = (fDerB * 7 + derB * 3) / 10;
+            fDerR = (fDerR * 6 + derR * 4) / 10;
+            fDerG = (fDerG * 6 + derG * 4) / 10;
+            fDerB = (fDerB * 6 + derB * 4) / 10;
           }
 
-          // Histéresis de 8 puntos (Instantáneo, sin retardos artificiales)
-          if (abs(fIzqR - pIzqR) >= 8 || abs(fIzqG - pIzqG) >= 8 || abs(fIzqB - pIzqB) >= 8) {
-            id(enviar_color_ha)->execute("light.comedor_luces_izquierda", fIzqR, fIzqG, fIzqB);
-            pIzqR = fIzqR; pIzqG = fIzqG; pIzqB = fIzqB;
-          }
-          if (abs(fDerR - pDerR) >= 8 || abs(fDerG - pDerG) >= 8 || abs(fDerB - pDerB) >= 8) {
-            id(enviar_color_ha)->execute("light.comedor_luces_derecha", fDerR, fDerG, fDerB);
-            pDerR = fDerR; pDerG = fDerG; pDerB = fDerB;
-          }
-          if (abs(fCenR - pCenR) >= 8 || abs(fCenG - pCenG) >= 8 || abs(fCenB - pCenB) >= 8) {
-            id(enviar_color_ha)->execute("light.comedor_luces_centro", fCenR, fCenG, fCenB);
-            pCenR = fCenR; pCenG = fCenG; pCenB = fCenB;
-          }
+          uint32_t tAhora = millis();
 
-          // Si el usuario activa la luz de techo, enviamos el borde superior a light.comedor_luces_techo
-          if (id(activar_techo).state) {
-            if (abs(fSupR - pSupR) >= 8 || abs(fSupG - pSupG) >= 8 || abs(fSupB - pSupB) >= 8) {
-              id(enviar_color_ha)->execute("light.comedor_luces_techo", fSupR, fSupG, fSupB);
-              pSupR = fSupR; pSupG = fSupG; pSupB = fSupB;
+          // Histéresis y cadencia adaptativa:
+          // Derecha e Izquierda (Luces WiFi locales + tira): máx 3 actualizaciones/seg (cada 300ms)
+          // Centro (Barra Tuya Cloud): máx 1 actualización/seg (cada 1000ms)
+          const int THRESHOLD_LOCAL = 12;
+          const int THRESHOLD_TUYA = 16;
+
+          if (tAhora - lastSentIzq >= 300) {
+            if (pIzqR < 0 || abs(fIzqR - pIzqR) >= THRESHOLD_LOCAL || abs(fIzqG - pIzqG) >= THRESHOLD_LOCAL || abs(fIzqB - pIzqB) >= THRESHOLD_LOCAL) {
+              id(enviar_color_ha)->execute("light.comedor_luces_izquierda", fIzqR, fIzqG, fIzqB);
+              pIzqR = fIzqR; pIzqG = fIzqG; pIzqB = fIzqB;
+              lastSentIzq = tAhora;
             }
           }
 
-          // Log de diagnóstico periódico cada 2 segundos en la consola de ESPHome
+          if (tAhora - lastSentDer >= 300) {
+            if (pDerR < 0 || abs(fDerR - pDerR) >= THRESHOLD_LOCAL || abs(fDerG - pDerG) >= THRESHOLD_LOCAL || abs(fDerB - pDerB) >= THRESHOLD_LOCAL) {
+              id(enviar_color_ha)->execute("light.comedor_luces_derecha", fDerR, fDerG, fDerB);
+              pDerR = fDerR; pDerG = fDerG; pDerB = fDerB;
+              lastSentDer = tAhora;
+            }
+          }
+
+          if (tAhora - lastSentCen >= 1000) {
+            if (pCenR < 0 || abs(fCenR - pCenR) >= THRESHOLD_TUYA || abs(fCenG - pCenG) >= THRESHOLD_TUYA || abs(fCenB - pCenB) >= THRESHOLD_TUYA) {
+              id(enviar_color_ha)->execute("light.comedor_luces_centro", fCenR, fCenG, fCenB);
+              pCenR = fCenR; pCenG = fCenG; pCenB = fCenB;
+              lastSentCen = tAhora;
+            }
+          }
+
+          if (id(activar_techo).state && (tAhora - lastSentSup >= 300)) {
+            if (pSupR < 0 || abs(fSupR - pSupR) >= THRESHOLD_LOCAL || abs(fSupG - pSupG) >= THRESHOLD_LOCAL || abs(fSupB - pSupB) >= THRESHOLD_LOCAL) {
+              id(enviar_color_ha)->execute("light.comedor_luces_techo", fSupR, fSupG, fSupB);
+              pSupR = fSupR; pSupG = fSupG; pSupB = fSupB;
+              lastSentSup = tAhora;
+            }
+          }
+
+          // Log de diagnóstico periódico cada 3 segundos
           static uint32_t tUltimoLog = 0;
-          uint32_t tAhora = millis();
-          if (tAhora - tUltimoLog >= 2000) {
+          if (tAhora - tUltimoLog >= 3000) {
             ESP_LOGI("ambilight", "Govee Activo: %d LEDs | IZQ(%d,%d,%d) | CEN(%d,%d,%d) | DER(%d,%d,%d)",
                      ledsLeidos, fIzqR, fIzqG, fIzqB, fCenR, fCenG, fCenB, fDerR, fDerG, fDerB);
             tUltimoLog = tAhora;
