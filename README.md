@@ -117,8 +117,15 @@ TV cameras inherently pick up $50/60\text{ Hz}$ room flicker and sensor noise. W
    ```
 
 ### Step 2: Install via HACS
-1. Open **HACS** in Home Assistant $\rightarrow$ Integrations $\rightarrow$ **Custom Repositories**.
-2. Add `https://github.com/VictorCV-DAM/ha-peripheral-light-ambilight` with category **Integration**.
+
+[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=VictorCV-DAM&repository=ha-peripheral-light-ambilight&category=integration)
+
+#### ⚡ 1-Click Fast Install
+Click the My Home Assistant badge above to open this repository directly inside your Home Assistant HACS store, then click **Download**.
+
+#### 🔍 Manual Add in HACS
+1. Open **HACS** in Home Assistant $\rightarrow$ Integrations $\rightarrow$ **Custom Repositories** (top right three dots).
+2. Paste repository URL: `https://github.com/VictorCV-DAM/ha-peripheral-light-ambilight` with category **Integration**.
 3. Click **Download** and restart Home Assistant.
 4. Go to **Settings ➔ Devices & Services ➔ Add Integration** and search for **Peripheral Light Ambilight**.
 5. Select your Left, Bottom/Center, Right, and optional Ceiling peripheral light entities.
