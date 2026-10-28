@@ -11,25 +11,171 @@
   [![Ko-fi](https://img.shields.io/badge/Ko--fi-Donate-red?logo=ko-fi)](https://ko-fi.com/victorcv)
 </div>
 
-High-performance, ultra-low latency hardware bridge and Home Assistant integration that expands your TV's ambient backlighting to all **peripheral room lights** (dining table spots, side floor lamps, wall sconces, and ceiling lights). Passively sniffs the proprietary WS2811 data stream of a **Govee DreamView T1 (H6199)** camera system and coordinates the room lights in real time with zero perceptible lag.
+High-performance, ultra-low latency hardware bridge and Home Assistant integration that expands your TV's ambient backlighting to all **peripheral room lights** (dining table spots, side floor lamps, wall sconces, and ceiling lights). Passively sniffs the proprietary WS2811 data stream of a **Govee DreamView T1 (H6199)** camera system and coordinates your room lights in real time with zero perceptible lag.
 
-Works with **any content** displayed on the screen: Smart TV apps (Netflix, YouTube, Prime Video, Disney+), gaming consoles (PS5, Xbox Series X, Nintendo Switch), Apple TV, Blu-ray, and live broadcast TV — without HDMI splitters, without cloud delays, and without altering the original Govee hardware.
+Works with **any content** on your screen: Smart TV apps (Netflix, YouTube, Prime Video, Disney+), gaming consoles (PS5, Xbox, Switch), Apple TV, and live TV — without HDMI splitters, without cloud delays, and without altering your original Govee setup.
 
 ---
 
-### 🏷️ GitHub SEO Topics / Tags
-When creating or editing the repository on GitHub, add these topics under the **About ⚙️** section (top right on GitHub):
+## 🚀 Installation & Setup Guide
 
-```text
-home-assistant, hacs, hacs-integration, ambilight, govee, govee-dreamview, govee-h6199, esp32, esphome, ws2811, smart-home, ambient-lighting, room-lighting, iot, reverse-engineering, philips-hue-alternative
+Follow these sequential steps to set up your hardware, flash the firmware, install the Home Assistant integration, and calibrate your lights.
+
+```
+┌─────────────────┐     ┌──────────────────┐     ┌───────────────────┐     ┌─────────────────┐
+│ 1. Wire Tap     │ ──> │ 2. Flash ESPHome │ ──> │ 3. Install HACS   │ ──> │ 4. Calibrate    │
+│ Single Green D+ │     │ Compile Firmware │     │ Add Integration   │     │ 360° Slider     │
+└─────────────────┘     └──────────────────┘     └───────────────────┘     └─────────────────┘
 ```
 
 ---
 
-- **Author & Maintainer:** Víctor C. V. ([@VictorCV-DAM](https://github.com/VictorCV-DAM))
-- **Email:** `victorcvtrabajo@gmail.com`
-- **Copyright:** © 2024-2026 Víctor C. V. All rights reserved.
-- **License:** [GNU General Public License v3.0](LICENSE) (GPL-3.0).
+### Step 1: Materials & Prerequisites
+Before starting, ensure you have:
+1. **ESP32-C3 DevKitM-1** (or any ESP32 with 160MHz+ CPU and Wi-Fi).
+2. **1x DuPont Jumper Wire** (Female-to-Male).
+3. **USB-C Cable & 5V 1A Power Supply** (a standard phone charger or your TV's USB port).
+4. **Working Govee DreamView T1 (H6199)** setup installed on your television.
+5. **Home Assistant** instance running on your local network with **HACS** installed.
+
+---
+
+### Step 2: Hardware Wiring (Passive Non-Intrusive Tap)
+You do **not** need to cut wires, strip insulation, or solder anything. The connection is a passive, high-impedance tap directly into the connector socket:
+
+```text
+               ┌───[ USB-C Power (5V) ]───┐
+            5V │ [ ]                  [ ] │ 5V
+           GND │ [ ] ◄── Unconnected  [ ] │ GND
+           3V3 │ [ ]                  [ ] │ ...
+           IO4 │ [ ]                  [ ] │ ...
+           IO3 │ [ ] ◄── GREEN WIRE   [ ] │ ...
+           IO2 │ [ ]                  [ ] │ ...
+           IO1 │ [ ]                  [ ] │ ...
+           IO0 │ [ ]                  [ ] │ ...
+               └──────────────────────────┘
+```
+
+#### Detailed Connection Steps:
+1. **Unplug the Govee DreamView T1 control box** from its power adapter.
+2. Locate the 4-pin output cable connecting the Govee control box to the LED strip on the back of the TV.
+3. Look at the back of the connector housing (or slide back the silicone strain relief sleeve).
+4. Identify **Pin 3 (Green Wire - Data Signal D+)**:
+   * **Pin 1 (Black):** GND
+   * **Pin 2 (White):** 12V Power
+   * **Pin 3 (Green):** **WS2811 Data (D+) ➔ Connect here**
+   * **Pin 4 (Red):** Auxiliary
+5. Insert the male pin of your DuPont jumper wire securely into the socket hole alongside the **Green wire**.
+6. Connect the female end of the jumper wire to pin **GPIO3** on your ESP32-C3.
+7. Power the ESP32 via its USB-C port (using the TV's USB port or a 5V charger connected to the same power strip).
+8. Reconnect the Govee power supply. The original TV LED strip will turn on and function completely normally.
+
+> [!NOTE]
+> **Why is only one wire needed?** The high-impedance GPIO input on the ESP32 passively sniffs the 800 kHz logic pulses without loading the circuit. When both the Govee power supply and the ESP32 USB power supply share the same household mains or TV ground plane, a reference ground is already established.
+
+---
+
+### Step 3: Flash the ESP32 via ESPHome
+
+#### Method A: Via ESPHome Dashboard (Home Assistant Add-on)
+1. Open Home Assistant and navigate to the **ESPHome** dashboard.
+2. Click **+ New Device**, name it `esp32-ambilight-bridge`, and select **ESP32-C3**.
+3. Click **Edit** on the newly created device card.
+4. Replace the default YAML with the contents of [`firmware/esp32_ambilight.yaml`](firmware/esp32_ambilight.yaml).
+5. In your ESPHome configuration directory (via Samba, SSH, or Studio Code Server), place [`firmware/govee_sniffer.h`](firmware/govee_sniffer.h) in the same folder as `esp32_ambilight.yaml`.
+6. Edit your `secrets.yaml` file in ESPHome to include your Wi-Fi details (see [`firmware/secrets.yaml.example`](firmware/secrets.yaml.example)):
+   ```yaml
+   wifi_ssid: "YOUR_WIFI_NAME"
+   wifi_password: "YOUR_WIFI_PASSWORD"
+   static_ip: "192.168.1.192"      # Choose an available IP on your network
+   gateway_ip: "192.168.1.1"
+   dns_ip: "192.168.1.1"
+   api_encryption_key: "YOUR_GENERATED_ESPHOME_KEY="
+   ```
+7. Connect the ESP32 to your PC via USB and click **Install ➔ Plug into this computer** (WebSerial flasher).
+8. Once the initial USB flash completes, all future firmware updates can be done **wirelessly via OTA** with one click.
+
+#### Method B: Via ESPHome CLI
+1. Open a terminal with Python 3.10+ installed:
+   ```bash
+   pip install esphome
+   ```
+2. Clone or download this repository and navigate to the `firmware/` directory:
+   ```bash
+   cd firmware
+   cp secrets.yaml.example secrets.yaml
+   # Edit secrets.yaml with your Wi-Fi credentials
+   ```
+3. Connect your ESP32 via USB and flash:
+   ```bash
+   esphome run esp32_ambilight.yaml
+   ```
+
+---
+
+### Step 4: Install the Custom Integration in Home Assistant
+
+#### ⚡ 1-Click Fast Install via HACS
+Click the My Home Assistant badge below to open this repository directly inside your Home Assistant HACS store, then click **Download**:
+
+[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=VictorCV-DAM&repository=ha-peripheral-light-ambilight&category=integration)
+
+#### 🔍 Manual Install via HACS
+1. Open **HACS** in Home Assistant $\rightarrow$ **Integrations**.
+2. Click the three dots menu (**⋮**) in the top-right corner $\rightarrow$ **Custom repositories**.
+3. In the Repository field, paste:
+   ```text
+   https://github.com/VictorCV-DAM/ha-peripheral-light-ambilight
+   ```
+4. Set the Type dropdown to **Integration** and click **Add**.
+5. Find **Peripheral Light Ambilight** in the integration list, click on it, and click **Download**.
+6. **Restart Home Assistant** (**Settings ➔ System ➔ Restart**).
+
+---
+
+### Step 5: Configure Light Zones via UI (Config Flow)
+1. In Home Assistant, go to **Settings ➔ Devices & Services ➔ Add Integration**.
+2. Search for **Peripheral Light Ambilight** and click it.
+3. Assign your room's smart lights to their corresponding TV screen zones:
+   * **Left Peripheral Light:** Light bulb or light group located on the left side of your room (e.g., `light.living_room_left`).
+   * **Bottom / Center Light:** Lights under the TV, dining table, or sofa (e.g., `light.dining_table_lights`).
+   * **Right Peripheral Light:** Light bulb or light group located on the right side of your room (e.g., `light.living_room_right`).
+   * **Ceiling Light (Optional):** Overhead spots or ceiling lamp (e.g., `light.ceiling_spots`). Leave empty if not used.
+   * **Transition Speed:** Recommended `0.1s` to `0.2s` for fluid, natural color shifts without sudden jumps.
+4. Click **Submit**.
+
+> [!IMPORTANT]
+> **Mandatory Permission for Ultra-Low Latency:**
+> Home Assistant restricts ESP32 devices from calling services directly by default. To unlock instant, lag-free response:
+> 1. Go to **Settings ➔ Devices & Services ➔ ESPHome**.
+> 2. Locate the `Govee DreamView Ambilight Bridge` card and click **Configure**.
+> 3. Check the box: **"Allow the device to perform Home Assistant service calls"**.
+> 4. Click **Submit**.
+
+---
+
+### Step 6: Calibration & Fine-Tuning
+Under the newly created device card in Home Assistant, you have full control over the spatial mapping:
+
+1. **Verify Zone Mapping with the RGB Test:**
+   * Click **`button.test_rgb_sequence`** (*Test RGB Sequence*).
+   * A 6-second diagnostic sequence will run across your room:
+     * **Phase 1 (2s):** Left = Red, Center = Green, Right = Blue *(Ceiling = White)*.
+     * **Phase 2 (2s):** Left = Green, Center = Blue, Right = Red *(Ceiling = Yellow)*.
+     * **Phase 3 (2s):** Left = Blue, Center = Red, Right = Green *(Ceiling = Cyan)*.
+   * This confirms that all light entities are receiving commands properly.
+
+2. **Align the Corner Starting Point with 360° Rotation:**
+   * Play a YouTube video showing primary colors on each edge (e.g., full screen red on left, blue on right).
+   * If your physical Govee LED strip was installed starting from a different corner, simply drag the **`number.360_rotation`** slider between `-180°` and `+180°` until the colors in your room match the TV screen borders millimeter-perfectly.
+   * If the sequence moves in the wrong direction (clockwise vs counter-clockwise), toggle **`switch.invert_rotation_direction`**.
+
+3. **Tune Edge LED Counts:**
+   * Adjust the sliders for **Left Edge** (`number.left_edge_leds`, def: 7), **Top Edge** (`number.top_edge_leds_ceiling`, def: 11), **Right Edge** (`number.right_edge_leds`, def: 7), and **Bottom Edge** (`number.bottom_edge_leds_center`, def: 11) to match your screen's aspect ratio.
+
+4. **Switching Modes for Daily Use:**
+   * **Watching TV:** Leave **`switch.ambilight_mode`** ON (or `select.mode_selector` set to `Ambilight`).
+   * **Normal Living Room Lighting:** Turn **`switch.ambilight_mode`** OFF (or select `Custom`). The ESP32 immediately stops sending data, allowing you to manually dim, turn on/off, or change the colors of your dining room lights without any interference.
 
 ---
 
@@ -46,42 +192,20 @@ home-assistant, hacs, hacs-integration, ambilight, govee, govee-dreamview, govee
 
 ---
 
-## 🛠️ Materials & Bill of Materials (BOM)
+## 🎛️ Exposed Controls in Home Assistant
 
-| Component | Quantity | Specification / Description |
+| Entity | Type | Function |
 | :--- | :---: | :--- |
-| **ESP32-C3 DevKitM-1** | 1 | 160 MHz 32-bit RISC-V MCU, 4MB Flash, USB-C (Standard ESP32 dual-core Xtensa also supported) |
-| **Jumper Wire** | 1 | Female-to-Male DuPont jumper wire (Single connection to Green D+ data wire) |
-| **USB-C Cable & 5V PSU** | 1 | Standard 5V 1A power supply or TV USB port |
-| **Govee DreamView T1 (H6199)** | 1 | Immersion TV Backlight Kit with camera control box and LED strip |
-
----
-
-## 🔌 Hardware Wiring & Pinout
-
-The ESP32 connects in **passive high-impedance listening mode** directly to the Govee LED strip connector without cutting or soldering:
-
-```text
-               ┌───[ USB-C Power (5V) ]───┐
-            5V │ [ ]                  [ ] │ 5V
-           GND │ [ ] ◄── Unconnected  [ ] │ GND
-           3V3 │ [ ]                  [ ] │ ...
-           IO4 │ [ ]                  [ ] │ ...
-           IO3 │ [ ] ◄── GREEN WIRE   [ ] │ ...
-           IO2 │ [ ]                  [ ] │ ...
-           IO1 │ [ ]                  [ ] │ ...
-           IO0 │ [ ]                  [ ] │ ...
-               └──────────────────────────┘
-```
-
-### Connector Details (Govee T1 Output)
-* **Pin 1 (Black):** GND
-* **Pin 2 (White):** 12V DC Power
-* **Pin 3 (Green):** **WS2811 Data Signal (D+)** $\rightarrow$ Connect to **GPIO3** of the ESP32.
-* **Pin 4 (Red):** Auxiliary / Unused
-
-> [!TIP]
-> **Single-Wire Tap**: Only the **Green data wire** needs to be connected to GPIO3. When powered from the TV's USB port or the same power strip, common ground is naturally established.
+| `switch.ambilight_mode` | Switch | Toggles real-time Ambilight synchronization ON / OFF (Manual Mode). |
+| `select.mode_selector` | Select | Dropdown selector: `Ambilight` (TV Sync) vs `Custom` (Independent room lighting). |
+| `number.360_rotation` | Slider | Rotates mapping by -180° to +180° for perfect alignment with TV strip installation. |
+| `number.left_edge_leds` | Slider | Number of LEDs sampled on the left edge (default: 7). |
+| `number.top_edge_leds_ceiling` | Slider | Number of LEDs sampled on the top edge (default: 11). |
+| `number.right_edge_leds` | Slider | Number of LEDs sampled on the right edge (default: 7). |
+| `number.bottom_edge_leds_center` | Slider | Number of LEDs sampled on the bottom edge (default: 11). |
+| `switch.invert_rotation_direction`| Switch | Inverts the clockwise/counter-clockwise strip direction. |
+| `switch.enable_ceiling_light` | Switch | Enables transmitting the top edge color to a ceiling light entity. |
+| `button.test_rgb_sequence` | Button | Runs a non-blocking 6-second RGB diagnostic cycle across all room lights. |
 
 ---
 
@@ -114,127 +238,6 @@ TV cameras inherently pick up $50/60\text{ Hz}$ room flicker and sensor noise. W
 
 ---
 
-## 📖 Step-by-Step Comprehensive Setup Guide
-
-### Phase 1: Physical Hardware Connection
-1. **Unplug the Govee DreamView T1 control box** from its power supply.
-2. Locate the 4-pin output cable connecting the control box to the TV back LED strip.
-3. Gently pull back the protective rubber boot or expose the back of the female socket.
-4. Insert the male pin of your DuPont jumper wire into the socket corresponding to the **Green wire (Pin 3 / D+)**.
-5. Connect the female end of the DuPont wire to **GPIO3** on the ESP32-C3.
-6. Connect the ESP32 to power via USB-C (from your TV's USB port or a 5V phone charger on the same wall strip).
-7. Reconnect power to the Govee system. The original TV backlight strip will power on and operate completely normally.
-
----
-
-### Phase 2: Flashing the ESP32 with ESPHome
-
-#### Option A: Via ESPHome Dashboard (Home Assistant Add-on)
-1. In Home Assistant, open the **ESPHome** panel.
-2. Click **+ New Device**, name it `esp32-ambilight-bridge`, and select **ESP32-C3**.
-3. Click **Edit** on the new card.
-4. Copy the entire contents of [`firmware/esp32_ambilight.yaml`](firmware/esp32_ambilight.yaml) into the editor.
-5. In the ESPHome file manager (or via Samba), place [`firmware/govee_sniffer.h`](firmware/govee_sniffer.h) in the same directory as the YAML file.
-6. Set your Wi-Fi credentials in `secrets.yaml` (see [`firmware/secrets.yaml.example`](firmware/secrets.yaml.example)).
-7. Connect the ESP32 to your computer via USB and click **Install ➔ Plug into this computer** (or flash over OTA once initially flashed).
-
-#### Option B: Via Command Line (ESPHome CLI)
-1. Install Python 3.10+ and ESPHome:
-   ```bash
-   pip install esphome
-   ```
-2. Navigate to the `firmware/` folder:
-   ```bash
-   cd firmware
-   cp secrets.yaml.example secrets.yaml
-   # Edit secrets.yaml with your Wi-Fi SSID and password
-   ```
-3. Compile and flash over USB (replace `COM3` with your serial port, or use `--device <ESP32_IP>` for OTA):
-   ```bash
-   esphome run esp32_ambilight.yaml --device COM3
-   ```
-
----
-
-### Phase 3: Home Assistant Integration Setup
-
-#### ⚡ 1-Click Fast Install via HACS
-Click the My Home Assistant badge below to open this repository directly inside your Home Assistant HACS store:
-
-[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=VictorCV-DAM&repository=ha-peripheral-light-ambilight&category=integration)
-
-#### 🔍 Manual Install via HACS
-1. Open **HACS** in Home Assistant $\rightarrow$ Integrations.
-2. Click the three dots in the top-right corner $\rightarrow$ **Custom repositories**.
-3. Paste: `https://github.com/VictorCV-DAM/ha-peripheral-light-ambilight`
-4. Set Type to **Integration** and click **Add**.
-5. Find **Peripheral Light Ambilight** in the list, click **Download**, and restart Home Assistant.
-
----
-
-### Phase 4: UI Configuration & Light Zone Mapping
-1. Go to **Settings ➔ Devices & Services ➔ Add Integration**.
-2. Search for **Peripheral Light Ambilight** and click it.
-3. In the setup window, select the smart lights in your room for each zone:
-   * **Left Peripheral Light:** Light group or bulb located to the left of the TV (e.g., `light.living_room_left`).
-   * **Bottom / Center Light:** Lights under the TV, dining table, or sofa (e.g., `light.dining_table_lights`).
-   * **Right Peripheral Light:** Light group or bulb located to the right of the TV (e.g., `light.living_room_right`).
-   * **Ceiling Light (Optional):** Overhead ceiling light or spotlights (e.g., `light.living_room_ceiling`).
-   * **Transition Speed:** Set between `0.1s` and `0.25s` for seamless color transitions.
-4. Click **Submit**.
-
-> [!IMPORTANT]
-> **Enable Service Calls in ESPHome**:
-> To enable ultra-low latency direct calls:
-> 1. In Home Assistant, go to **Settings ➔ Devices & Services ➔ ESPHome**.
-> 2. Click **Configure** on the `Govee DreamView Ambilight Bridge` card.
-> 3. Check the box: **"Allow the device to perform Home Assistant service calls"**.
-
----
-
-### Phase 5: Calibration & Fine-Tuning
-
-Once the integration is active, you will find several calibration entities under the ESP32 device card:
-
-1. **Verify Color Zones with the RGB Test:**
-   * Press **`button.test_rgb_sequence`** (*Test RGB Sequence*).
-   * A non-blocking 6-second diagnostic sequence will execute:
-     * **Step 1:** Left = Red, Center = Green, Right = Blue.
-     * **Step 2:** Left = Green, Center = Blue, Right = Red.
-     * **Step 3:** Left = Blue, Center = Red, Right = Green.
-   * This confirms that all room lights are correctly mapped and responsive.
-
-2. **Calibrate Starting Corner with 360° Rotation:**
-   * Play a full-screen red video or a test pattern on YouTube with distinct colors on each edge.
-   * If the colors appear shifted (e.g., left color showing on the right lights), adjust the **`number.360_rotation`** slider between `-180°` and `+180°` until the colors align identically with the TV borders.
-   * If the strip installation direction runs opposite to your setup, toggle **`switch.invert_rotation_direction`**.
-
-3. **Adjust LED Count per Edge:**
-   * Adjust **`number.left_edge_leds`** (default: 7), **`number.right_edge_leds`** (default: 7), **`number.bottom_edge_leds_center`** (default: 11), and **`number.top_edge_leds_ceiling`** (default: 11) to match your physical TV proportions.
-
-4. **Switching Modes:**
-   * When watching TV: Leave **`switch.ambilight_mode`** ON (or `select.mode_selector` set to `Ambilight`).
-   * When using the room normally: Turn **`switch.ambilight_mode`** OFF (or select `Custom`). The ESP32 immediately stops transmitting, giving you 100% manual control over your lights without interference.
-
----
-
-## 🎛️ Exposed Controls in Home Assistant
-
-| Entity | Type | Function |
-| :--- | :---: | :--- |
-| `switch.ambilight_mode` | Switch | Toggles real-time Ambilight synchronization ON / OFF (Manual Mode). |
-| `select.mode_selector` | Select | Dropdown selector: `Ambilight` (TV Sync) vs `Custom` (Independent room lighting). |
-| `number.360_rotation` | Slider | Rotates mapping by -180° to +180° for perfect alignment with TV strip installation. |
-| `number.left_edge_leds` | Slider | Number of LEDs sampled on the left edge (default: 7). |
-| `number.top_edge_leds_ceiling` | Slider | Number of LEDs sampled on the top edge (default: 11). |
-| `number.right_edge_leds` | Slider | Number of LEDs sampled on the right edge (default: 7). |
-| `number.bottom_edge_leds_center` | Slider | Number of LEDs sampled on the bottom edge (default: 11). |
-| `switch.invert_rotation_direction`| Switch | Inverts the clockwise/counter-clockwise strip direction. |
-| `switch.enable_ceiling_light` | Switch | Enables transmitting the top edge color to a ceiling light entity. |
-| `button.test_rgb_sequence` | Button | Runs a non-blocking 6-second RGB diagnostic cycle across all room lights. |
-
----
-
 ## ❓ Frequently Asked Questions (FAQ)
 
 ### Does this replace or disable my original Govee TV LED strip?
@@ -248,6 +251,15 @@ Any smart light integrated into Home Assistant that supports RGB color changing 
 
 ---
 
+## 🏷️ GitHub SEO Topics / Tags
+When setting up the repository on GitHub, add these topics under the **About ⚙️** section:
+
+```text
+home-assistant, hacs, hacs-integration, ambilight, govee, govee-dreamview, govee-h6199, esp32, esphome, ws2811, smart-home, ambient-lighting, room-lighting, iot, reverse-engineering, philips-hue-alternative
+```
+
+---
+
 ## ☕ Support the Project
 
 If this project enhanced your Home Assistant ambient lighting experience, consider supporting ongoing development:
@@ -255,3 +267,10 @@ If this project enhanced your Home Assistant ambient lighting experience, consid
 [![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-Donate-orange?style=for-the-badge&logo=buy-me-a-coffee)](https://buymeacoffee.com/VictorCV)
 [![PayPal](https://img.shields.io/badge/PayPal-Donate-blue?style=for-the-badge&logo=paypal)](https://paypal.me/victorcava)
 [![Ko-fi](https://img.shields.io/badge/Ko--fi-Donate-red?style=for-the-badge&logo=ko-fi)](https://ko-fi.com/victorcv)
+
+---
+
+- **Author & Maintainer:** Víctor C. V. ([@VictorCV-DAM](https://github.com/VictorCV-DAM))
+- **Email:** `victorcvtrabajo@gmail.com`
+- **Copyright:** © 2024-2026 Víctor C. V. All rights reserved.
+- **License:** [GNU General Public License v3.0](LICENSE) (GPL-3.0).
