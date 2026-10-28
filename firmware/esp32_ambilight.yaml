@@ -1,7 +1,8 @@
-# Board: ESP32-C3 DevKitM-1 (Espressif)
+# Board: ESP32-C3 DevKitM-1 (Espressif RISC-V 160MHz)
+# Ultra-Low Latency Govee DreamView T1 (H6199) Hardware Sniffer Bridge
 esphome:
-  name: esp32-ambiligth
-  friendly_name: Ambilight Govee Bridge
+  name: esp32-ambilight-bridge
+  friendly_name: Govee DreamView Ambilight Bridge
   includes:
     - govee_sniffer.h
 
@@ -18,20 +19,20 @@ logger:
 
 api:
   encryption:
-    key: "87R9C1MCPvg8ijQB5aM+enPk26Hbs51ah0OtsMBNv6w="
+    key: !secret api_encryption_key
 
 ota:
   - platform: esphome
 
 wifi:
-  ssid: "PAGAtuWIFI"
+  ssid: !secret wifi_ssid
   password: !secret wifi_password
   power_save_mode: none
   manual_ip:
-    static_ip: 192.168.1.192
-    gateway: 192.168.1.1
+    static_ip: !secret static_ip
+    gateway: !secret gateway_ip
     subnet: 255.255.255.0
-    dns1: 192.168.1.1
+    dns1: !secret dns_ip
 
 binary_sensor:
   - platform: gpio
@@ -61,26 +62,6 @@ switch:
     on_turn_off:
       - lambda: |-
           id(modo_luces).publish_state("Custom");
-      - homeassistant.service:
-          service: homeassistant.turn_off
-          data:
-            entity_id: "light.comedor_luces_izquierda"
-      - homeassistant.service:
-          service: homeassistant.turn_off
-          data:
-            entity_id: "light.comedor_luces_centro"
-      - homeassistant.service:
-          service: homeassistant.turn_off
-          data:
-            entity_id: "light.comedor_luces_derecha"
-      - if:
-          condition:
-            lambda: 'return id(activar_techo).state;'
-          then:
-            - homeassistant.service:
-                service: homeassistant.turn_off
-                data:
-                  entity_id: "light.comedor_luces_techo"
 
   - platform: template
     name: "Invert Rotation Direction"
@@ -108,9 +89,9 @@ select:
     set_action:
       - lambda: |-
           if (x == "Ambilight") {
-            id(modo_ambilight).turn_on();
+            id(modo_ambilight).publish_state(true);
           } else {
-            id(modo_ambilight).turn_off();
+            id(modo_ambilight).publish_state(false);
           }
 
 number:
@@ -174,14 +155,20 @@ number:
 
 script:
   - id: enviar_color_ha
-    mode: parallel
-    max_runs: 10
+    mode: restart
     parameters:
       entidad: string
       r: int
       g: int
       b: int
     then:
+      - homeassistant.service:
+          service: light.turn_on
+          data:
+            entity_id: !lambda "return entidad;"
+          data_template:
+            transition: "0.1"
+            rgb_color: !lambda 'return "[" + std::to_string(r) + "," + std::to_string(g) + "," + std::to_string(b) + "]";'
       - homeassistant.event:
           event: esphome.ambilight_color
           data:
@@ -194,7 +181,7 @@ script:
     mode: restart
     then:
       - lambda: 'id(test_en_curso) = true;'
-      # Paso 1: Izq Rojo, Centro Verde, Der Azul (Techo Blanco)
+      # Step 1: Left Red, Center Green, Right Blue (Ceiling White)
       - script.execute:
           id: enviar_color_ha
           entidad: "light.comedor_luces_izquierda"
@@ -225,7 +212,7 @@ script:
                 b: 255
       - delay: 2s
 
-      # Paso 2: Izq Verde, Centro Azul, Der Rojo (Techo Amarillo)
+      # Step 2: Left Green, Center Blue, Right Red (Ceiling Yellow)
       - script.execute:
           id: enviar_color_ha
           entidad: "light.comedor_luces_izquierda"
@@ -256,7 +243,7 @@ script:
                 b: 0
       - delay: 2s
 
-      # Paso 3: Izq Azul, Centro Rojo, Der Verde (Techo Cian)
+      # Step 3: Left Blue, Center Red, Right Green (Ceiling Cyan)
       - script.execute:
           id: enviar_color_ha
           entidad: "light.comedor_luces_izquierda"
@@ -299,7 +286,7 @@ interval:
   - interval: 40ms
     then:
       - lambda: |-
-          // Variables estaticas para filtro IIR e histeresis (Exacto de commit 6aa3e61)
+          // Static buffers for temporal smoothing & hysteresis
           static int fIzqR = -1, fIzqG = -1, fIzqB = -1;
           static int fSupR = -1, fSupG = -1, fSupB = -1;
           static int fCenR = -1, fCenG = -1, fCenB = -1;
@@ -310,29 +297,21 @@ interval:
           static int pCenR = -1, pCenG = -1, pCenB = -1;
           static int pDerR = -1, pDerG = -1, pDerB = -1;
 
-          // Si estamos en modo apagado o test, resetear estados y salir
+          // If in Custom / Paused mode or running RGB test, do not overwrite lights
           if (id(test_en_curso) || !id(modo_ambilight).state) {
             fIzqR = -1; fSupR = -1; fCenR = -1; fDerR = -1;
             pIzqR = -1; pSupR = -1; pCenR = -1; pDerR = -1;
             return;
           }
 
+          static portMUX_TYPE myMutex = portMUX_INITIALIZER_UNLOCKED;
+
           const int MAX_LEDS = 38;
           uint8_t ledData[MAX_LEDS * 3] = {0};
 
-          // Captura con proteccion atomica interna en govee_sniffer.h
+          taskENTER_CRITICAL(&myMutex);
           int ledsLeidos = capture_govee_frame(ledData, MAX_LEDS);
-
-          // Log de diagnostico periodico cada 2 segundos
-          static uint32_t tUltimoLog = 0;
-          if (millis() - tUltimoLog >= 1500) {
-            ESP_LOGI("ambilight", "Govee: %d LEDs | L0=(R:%d,G:%d,B:%d) L1=(R:%d,G:%d,B:%d) | IZQ(%d,%d,%d) CEN(%d,%d,%d) DER(%d,%d,%d)",
-                     ledsLeidos,
-                     ledData[0], ledData[1], ledData[2],
-                     ledData[3], ledData[4], ledData[5],
-                     fIzqR, fIzqG, fIzqB, fCenR, fCenG, fCenB, fDerR, fDerG, fDerB);
-            tUltimoLog = millis();
-          }
+          taskEXIT_CRITICAL(&myMutex);
 
           if (ledsLeidos < 30) return;
 
@@ -356,60 +335,60 @@ interval:
             return 1 + pos;
           };
 
-          // A. Zona Izquierda (Lateral Izquierdo)
+          // A. Left Zone (Left Edge)
           long sR_izq = 0, sG_izq = 0, sB_izq = 0;
           for (int i = 0; i < nIzq; i++) {
             int k = getLedIndex(i);
-            sR_izq += ledData[k * 3];
-            sG_izq += ledData[k * 3 + 1];
+            sG_izq += ledData[k * 3];
+            sR_izq += ledData[k * 3 + 1];
             sB_izq += ledData[k * 3 + 2];
           }
           int izqR = sR_izq / nIzq;
           int izqG = sG_izq / nIzq;
           int izqB = sB_izq / nIzq;
 
-          // B. Zona Techo (Borde Superior)
+          // B. Ceiling Zone (Top Edge)
           int startSupVirt = nIzq;
           long sR_sup = 0, sG_sup = 0, sB_sup = 0;
           for (int i = startSupVirt; i < startSupVirt + nSup; i++) {
             int k = getLedIndex(i);
-            sR_sup += ledData[k * 3];
-            sG_sup += ledData[k * 3 + 1];
+            sG_sup += ledData[k * 3];
+            sR_sup += ledData[k * 3 + 1];
             sB_sup += ledData[k * 3 + 2];
           }
           int supR = (nSup > 0) ? (sR_sup / nSup) : 0;
           int supG = (nSup > 0) ? (sG_sup / nSup) : 0;
           int supB = (nSup > 0) ? (sB_sup / nSup) : 0;
 
-          // C. Zona Derecha (Lateral Derecho)
+          // C. Right Zone (Right Edge)
           int startDerVirt = nIzq + nSup;
           long sR_der = 0, sG_der = 0, sB_der = 0;
           for (int i = startDerVirt; i < startDerVirt + nDer; i++) {
             int k = getLedIndex(i);
-            sR_der += ledData[k * 3];
-            sG_der += ledData[k * 3 + 1];
+            sG_der += ledData[k * 3];
+            sR_der += ledData[k * 3 + 1];
             sB_der += ledData[k * 3 + 2];
           }
           int derR = sR_der / nDer;
           int derG = sG_der / nDer;
           int derB = sB_der / nDer;
 
-          // D. Zona Centro (Borde Inferior / Mesa)
+          // D. Center / Table Zone (Bottom Edge)
           int startInfVirt = startDerVirt + nDer;
           if (nInf < 1) nInf = 1;
 
           long sR_cen = 0, sG_cen = 0, sB_cen = 0;
           for (int i = startInfVirt; i < startInfVirt + nInf; i++) {
             int k = getLedIndex(i);
-            sR_cen += ledData[k * 3];
-            sG_cen += ledData[k * 3 + 1];
+            sG_cen += ledData[k * 3];
+            sR_cen += ledData[k * 3 + 1];
             sB_cen += ledData[k * 3 + 2];
           }
           int cenR = sR_cen / nInf;
           int cenG = sG_cen / nInf;
           int cenB = sB_cen / nInf;
 
-          // Filtro IIR 70/30 de suavizado temporal calibrado de 6aa3e61
+          // 70/30 IIR Temporal Smoothing Filter
           if (fIzqR < 0) {
             fIzqR = izqR; fIzqG = izqG; fIzqB = izqB;
             fSupR = supR; fSupG = supG; fSupB = supB;
@@ -433,37 +412,24 @@ interval:
             fDerB = (fDerB * 7 + derB * 3) / 10;
           }
 
-          // Histeresis de 8 puntos con limite de tasa de 100ms (cero saturacion de HA / DB)
-          static uint32_t lastSentIzq = 0;
-          static uint32_t lastSentDer = 0;
-          static uint32_t lastSentCen = 0;
-          static uint32_t lastSentSup = 0;
-          uint32_t nowMs = millis();
-
-          if ((abs(fIzqR - pIzqR) >= 8 || abs(fIzqG - pIzqG) >= 8 || abs(fIzqB - pIzqB) >= 8) && (nowMs - lastSentIzq >= 100)) {
+          // 8-Point Hysteresis: Only dispatch commands when delta exceeds noise threshold
+          if (abs(fIzqR - pIzqR) >= 8 || abs(fIzqG - pIzqG) >= 8 || abs(fIzqB - pIzqB) >= 8) {
             id(enviar_color_ha)->execute("light.comedor_luces_izquierda", fIzqR, fIzqG, fIzqB);
             pIzqR = fIzqR; pIzqG = fIzqG; pIzqB = fIzqB;
-            lastSentIzq = nowMs;
           }
-
-          if ((abs(fDerR - pDerR) >= 8 || abs(fDerG - pDerG) >= 8 || abs(fDerB - pDerB) >= 8) && (nowMs - lastSentDer >= 100)) {
+          if (abs(fDerR - pDerR) >= 8 || abs(fDerG - pDerG) >= 8 || abs(fDerB - pDerB) >= 8) {
             id(enviar_color_ha)->execute("light.comedor_luces_derecha", fDerR, fDerG, fDerB);
             pDerR = fDerR; pDerG = fDerG; pDerB = fDerB;
-            lastSentDer = nowMs;
           }
-
-          if ((abs(fCenR - pCenR) >= 8 || abs(fCenG - pCenG) >= 8 || abs(fCenB - pCenB) >= 8) && (nowMs - lastSentCen >= 100)) {
+          if (abs(fCenR - pCenR) >= 8 || abs(fCenG - pCenG) >= 8 || abs(fCenB - pCenB) >= 8) {
             id(enviar_color_ha)->execute("light.comedor_luces_centro", fCenR, fCenG, fCenB);
             pCenR = fCenR; pCenG = fCenG; pCenB = fCenB;
-            lastSentCen = nowMs;
           }
 
+          // Optional Top Edge (Ceiling Light)
           if (id(activar_techo).state) {
-            if ((abs(fSupR - pSupR) >= 8 || abs(fSupG - pSupG) >= 8 || abs(fSupB - pSupB) >= 8) && (nowMs - lastSentSup >= 100)) {
+            if (abs(fSupR - pSupR) >= 8 || abs(fSupG - pSupG) >= 8 || abs(fSupB - pSupB) >= 8) {
               id(enviar_color_ha)->execute("light.comedor_luces_techo", fSupR, fSupG, fSupB);
               pSupR = fSupR; pSupG = fSupG; pSupB = fSupB;
-              lastSentSup = nowMs;
             }
           }
-
-
