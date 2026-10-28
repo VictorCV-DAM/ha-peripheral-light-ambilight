@@ -1,4 +1,5 @@
 <div align="center">
+  <img src="https://raw.githubusercontent.com/VictorCV-DAM/ha-peripheral-light-ambilight/main/icon.png" width="130" height="130" alt="Peripheral Light Ambilight Icon" />
   <h1>Peripheral Light Ambilight for Home Assistant</h1>
   <p><b>Extend your TV Ambilight to peripheral room lights with ultra-low latency</b></p>
 
