@@ -325,9 +325,12 @@ interval:
 
           // Log de diagnostico periodico cada 2 segundos
           static uint32_t tUltimoLog = 0;
-          if (millis() - tUltimoLog >= 2000) {
-            ESP_LOGI("ambilight", "Govee: %d LEDs | RAW0=(R:%d,G:%d,B:%d) | IZQ(%d,%d,%d) CEN(%d,%d,%d) DER(%d,%d,%d)", ledsLeidos, ledData[0], ledData[1], ledData[2], fIzqR, fIzqG, fIzqB, fCenR, fCenG, fCenB, fDerR, fDerG, fDerB);
-
+          if (millis() - tUltimoLog >= 1500) {
+            ESP_LOGI("ambilight", "Govee: %d LEDs | L0=(R:%d,G:%d,B:%d) L1=(R:%d,G:%d,B:%d) | IZQ(%d,%d,%d) CEN(%d,%d,%d) DER(%d,%d,%d)",
+                     ledsLeidos,
+                     ledData[0], ledData[1], ledData[2],
+                     ledData[3], ledData[4], ledData[5],
+                     fIzqR, fIzqG, fIzqB, fCenR, fCenG, fCenB, fDerR, fDerG, fDerB);
             tUltimoLog = millis();
           }
 
@@ -430,26 +433,36 @@ interval:
             fDerB = (fDerB * 7 + derB * 3) / 10;
           }
 
-          // Histeresis de 8 puntos calibrada de commit 6aa3e61
-          if (abs(fIzqR - pIzqR) >= 8 || abs(fIzqG - pIzqG) >= 8 || abs(fIzqB - pIzqB) >= 8) {
+          // Histeresis de 8 puntos con limite de tasa de 100ms (cero saturacion de HA / DB)
+          static uint32_t lastSentIzq = 0;
+          static uint32_t lastSentDer = 0;
+          static uint32_t lastSentCen = 0;
+          static uint32_t lastSentSup = 0;
+          uint32_t nowMs = millis();
+
+          if ((abs(fIzqR - pIzqR) >= 8 || abs(fIzqG - pIzqG) >= 8 || abs(fIzqB - pIzqB) >= 8) && (nowMs - lastSentIzq >= 100)) {
             id(enviar_color_ha)->execute("light.comedor_luces_izquierda", fIzqR, fIzqG, fIzqB);
             pIzqR = fIzqR; pIzqG = fIzqG; pIzqB = fIzqB;
+            lastSentIzq = nowMs;
           }
 
-          if (abs(fDerR - pDerR) >= 8 || abs(fDerG - pDerG) >= 8 || abs(fDerB - pDerB) >= 8) {
+          if ((abs(fDerR - pDerR) >= 8 || abs(fDerG - pDerG) >= 8 || abs(fDerB - pDerB) >= 8) && (nowMs - lastSentDer >= 100)) {
             id(enviar_color_ha)->execute("light.comedor_luces_derecha", fDerR, fDerG, fDerB);
             pDerR = fDerR; pDerG = fDerG; pDerB = fDerB;
+            lastSentDer = nowMs;
           }
 
-          if (abs(fCenR - pCenR) >= 8 || abs(fCenG - pCenG) >= 8 || abs(fCenB - pCenB) >= 8) {
+          if ((abs(fCenR - pCenR) >= 8 || abs(fCenG - pCenG) >= 8 || abs(fCenB - pCenB) >= 8) && (nowMs - lastSentCen >= 100)) {
             id(enviar_color_ha)->execute("light.comedor_luces_centro", fCenR, fCenG, fCenB);
             pCenR = fCenR; pCenG = fCenG; pCenB = fCenB;
+            lastSentCen = nowMs;
           }
 
           if (id(activar_techo).state) {
-            if (abs(fSupR - pSupR) >= 8 || abs(fSupG - pSupG) >= 8 || abs(fSupB - pSupB) >= 8) {
+            if ((abs(fSupR - pSupR) >= 8 || abs(fSupG - pSupG) >= 8 || abs(fSupB - pSupB) >= 8) && (nowMs - lastSentSup >= 100)) {
               id(enviar_color_ha)->execute("light.comedor_luces_techo", fSupR, fSupG, fSupB);
               pSupR = fSupR; pSupG = fSupG; pSupB = fSupB;
+              lastSentSup = nowMs;
             }
           }
 
