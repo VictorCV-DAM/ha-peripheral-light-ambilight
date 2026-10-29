@@ -6,9 +6,8 @@
 #define GOVEE_PIN_MASK 0x08 // GPIO3
 #define GOVEE_GPIO_IN ((volatile uint32_t *)0x6000403C)
 
-// Ejecuta 100% en SRAM interna (IRAM) - Cero fallos de caché, cero jitter
+// Exact 6aa3e61 mid-point sniffer with reset threshold adjusted to 80,000 cycles (500us)
 IRAM_ATTR inline int capture_govee_frame(uint8_t *ledData, int maxLeds) {
-    // 1. Esperar silencio inter-trama en BAJO (>250000 ciclos = 1.56ms)
     uint32_t tSearchStart = esp_cpu_get_cycle_count();
     bool inReset = false;
 
@@ -17,7 +16,7 @@ IRAM_ATTR inline int capture_govee_frame(uint8_t *ledData, int maxLeds) {
         if (!(*GOVEE_GPIO_IN & GOVEE_PIN_MASK)) {
             uint32_t tLowStart = esp_cpu_get_cycle_count();
             while (!(*GOVEE_GPIO_IN & GOVEE_PIN_MASK)) {
-                if (esp_cpu_get_cycle_count() - tLowStart > 250000) {
+                if (esp_cpu_get_cycle_count() - tLowStart > 80000) { // >500us en bajo
                     inReset = true;
                     break;
                 }
@@ -37,7 +36,6 @@ IRAM_ATTR inline int capture_govee_frame(uint8_t *ledData, int maxLeds) {
             uint8_t byteVal = 0;
             for (int bit = 7; bit >= 0; bit--) {
                 // A. Esperar flanco de subida (0 -> 1)
-                // Timeout de 200000 ciclos (1.25ms): cruza pausas internas sin cortar
                 uint32_t tWaitRise = esp_cpu_get_cycle_count();
                 while (!(*GOVEE_GPIO_IN & GOVEE_PIN_MASK)) {
                     if (esp_cpu_get_cycle_count() - tWaitRise > 200000) {
@@ -50,8 +48,6 @@ IRAM_ATTR inline int capture_govee_frame(uint8_t *ledData, int maxLeds) {
                 uint32_t tRise = esp_cpu_get_cycle_count();
 
                 // B. Esperar exactamente al punto medio del bit (90 ciclos = 560ns)
-                // Bit 0 dura ~350ns en alto (a 560ns ya cayó a 0)
-                // Bit 1 dura ~900ns en alto (a 560ns sigue en 1)
                 while (esp_cpu_get_cycle_count() - tRise < 90);
 
                 // C. Muestrear el pin en el punto medio

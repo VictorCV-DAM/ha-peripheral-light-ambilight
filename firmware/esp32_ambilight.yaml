@@ -155,20 +155,14 @@ number:
 
 script:
   - id: enviar_color_ha
-    mode: restart
+    mode: parallel
+    max_runs: 10
     parameters:
       entidad: string
       r: int
       g: int
       b: int
     then:
-      - homeassistant.service:
-          service: light.turn_on
-          data:
-            entity_id: !lambda "return entidad;"
-          data_template:
-            transition: "0.1"
-            rgb_color: !lambda 'return "[" + std::to_string(r) + "," + std::to_string(g) + "," + std::to_string(b) + "]";'
       - homeassistant.event:
           event: esphome.ambilight_color
           data:
