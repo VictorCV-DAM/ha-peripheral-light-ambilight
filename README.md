@@ -198,16 +198,19 @@ Under the newly created device card in Home Assistant, you have full control ove
 
 | Entity | Type | Function |
 | :--- | :---: | :--- |
-| `switch.ambilight_mode` | Switch | Toggles real-time Ambilight synchronization ON / OFF (Manual Mode). |
-| `select.mode_selector` | Select | Dropdown selector: `Ambilight` (TV Sync) vs `Custom` (Independent room lighting). |
-| `number.360_rotation` | Slider | Rotates mapping by -180° to +180° for perfect alignment with TV strip installation. |
-| `number.left_edge_leds` | Slider | Number of LEDs sampled on the left edge (default: 7). |
-| `number.top_edge_leds_ceiling` | Slider | Number of LEDs sampled on the top edge (default: 11). |
-| `number.right_edge_leds` | Slider | Number of LEDs sampled on the right edge (default: 7). |
-| `number.bottom_edge_leds_center` | Slider | Number of LEDs sampled on the bottom edge (default: 11). |
-| `switch.invert_rotation_direction`| Switch | Inverts the clockwise/counter-clockwise strip direction. |
-| `switch.enable_ceiling_light` | Switch | Enables transmitting the top edge color to a ceiling light entity. |
-| `button.test_rgb_sequence` | Button | Runs a non-blocking 6-second RGB diagnostic cycle across all room lights. |
+| `switch.1_ambilight_mode` | Switch | Toggles real-time Ambilight synchronization ON / OFF (Manual Room Mode). |
+| `number.2_transition_speed` | Slider | Sets transition time (0.00s to 1.50s) between color updates for ultra-smooth shifts. |
+| `switch.3_ceiling_light` | Switch | Enables transmitting the top edge color to a dedicated ceiling light entity. |
+| `number.rotation_360_angle` | Slider | Rotates mapping by 0° to 350° for perfect alignment with TV strip installation. |
+| `switch.rotation_invert_direction` | Switch | Inverts clockwise / counter-clockwise strip traversal direction. |
+| `number.edge_1_left_leds` | Slider | Number of LEDs sampled on the left edge (default: 7). |
+| `number.edge_2_top_leds` | Slider | Number of LEDs sampled on the top edge (default: 11). |
+| `number.edge_3_right_leds` | Slider | Number of LEDs sampled on the right edge (default: 7). |
+| `number.edge_4_bottom_leds` | Slider | Number of LEDs sampled on the bottom edge (default: 11). |
+| `sensor.estimated_latency` | Sensor | Real-time estimated end-to-end latency in milliseconds based on transition speed. |
+| `sensor.average_latency_20s` | Sensor | Continuous rolling average measured dispatch latency over the last 20 seconds. |
+| `button.restart_esp32` | Button | Restarts the ESP32 hardware directly from Home Assistant. |
+| `button.view_live_logs` | Button | Opens the ESPHome live log viewer stream directly inside Home Assistant. |
 
 ---
 

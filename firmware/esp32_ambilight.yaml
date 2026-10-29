@@ -48,12 +48,12 @@ wifi:
 
 button:
   - platform: restart
-    name: "Reiniciar ESP32"
+    name: "Restart ESP32"
     id: reiniciar_esp32
     icon: "mdi:restart"
 
   - platform: template
-    name: "Ver Pantalla de Registros"
+    name: "View Live Logs"
     id: btn_abrir_registros
     icon: "mdi:console-network"
     on_press:
@@ -72,7 +72,7 @@ binary_sensor:
 
 sensor:
   - platform: template
-    name: "Latencia Estimada"
+    name: "Estimated Latency"
     id: latencia_estimada
     unit_of_measurement: "ms"
     accuracy_decimals: 0
@@ -80,7 +80,7 @@ sensor:
     state_class: measurement
 
   - platform: template
-    name: "Última Latencia Media"
+    name: "Average Latency (20s)"
     id: latencia_media_registrada
     unit_of_measurement: "ms"
     accuracy_decimals: 0
@@ -101,21 +101,21 @@ globals:
 
 switch:
   - platform: template
-    name: "1. Modo Ambilight"
+    name: "1. Ambilight Mode"
     id: modo_ambilight
     icon: "mdi:television-ambient-light"
     optimistic: true
     restore_mode: RESTORE_DEFAULT_ON
 
   - platform: template
-    name: "3. Luz de Techo"
+    name: "3. Ceiling Light"
     id: activar_techo
     icon: "mdi:ceiling-light"
     optimistic: true
     restore_mode: RESTORE_DEFAULT_OFF
 
   - platform: template
-    name: "Giro: Invertir Sentido"
+    name: "Rotation: Invert Direction"
     id: invertir_sentido
     icon: "mdi:rotate-left-variant"
     optimistic: true
@@ -123,7 +123,7 @@ switch:
 
 number:
   - platform: template
-    name: "2. Velocidad de Transición"
+    name: "2. Transition Speed"
     id: velocidad_transicion
     unit_of_measurement: "s"
     icon: "mdi:transition"
@@ -141,7 +141,7 @@ number:
           id(latencia_estimada).publish_state(lat);
 
   - platform: template
-    name: "Borde 1 - Izquierda (LEDs)"
+    name: "Edge 1 - Left (LEDs)"
     id: num_leds_izq
     icon: "mdi:arrow-left-bold-box-outline"
     min_value: 4
@@ -153,7 +153,7 @@ number:
     restore_value: true
 
   - platform: template
-    name: "Borde 2 - Superior (LEDs)"
+    name: "Edge 2 - Top (LEDs)"
     id: num_leds_sup
     icon: "mdi:arrow-up-bold-box-outline"
     min_value: 6
@@ -165,7 +165,7 @@ number:
     restore_value: true
 
   - platform: template
-    name: "Borde 3 - Derecha (LEDs)"
+    name: "Edge 3 - Right (LEDs)"
     id: num_leds_der
     icon: "mdi:arrow-right-bold-box-outline"
     min_value: 4
@@ -177,7 +177,7 @@ number:
     restore_value: true
 
   - platform: template
-    name: "Borde 4 - Inferior (LEDs)"
+    name: "Edge 4 - Bottom (LEDs)"
     id: num_leds_inf
     icon: "mdi:arrow-down-bold-box-outline"
     min_value: 6
@@ -189,7 +189,7 @@ number:
     restore_value: true
 
   - platform: template
-    name: "Giro: Rotación 360°"
+    name: "Rotation: 360° Angle"
     id: rotacion_offset
     unit_of_measurement: "°"
     icon: "mdi:rotate-360"
