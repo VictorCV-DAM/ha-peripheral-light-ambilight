@@ -10,6 +10,9 @@ esphome:
       - delay: 2s
       - homeassistant.service:
           service: automation.reload
+      - lambda: |-
+          float val = id(velocidad_transicion).state;
+          id(latencia_estimada).publish_state(65.0f + (val * 1000.0f));
 
 esp32:
   board: esp32-c3-devkitm-1
@@ -24,20 +27,26 @@ logger:
 
 api:
   encryption:
-    key: !secret api_encryption_key
+    key: "87R9C1MCPvg8ijQB5aM+enPk26Hbs51ah0OtsMBNv6w="
 
 ota:
   - platform: esphome
 
 wifi:
-  ssid: !secret wifi_ssid
+  ssid: "PAGAtuWIFI"
   password: !secret wifi_password
   power_save_mode: none
   manual_ip:
-    static_ip: !secret static_ip
-    gateway: !secret gateway_ip
+    static_ip: 192.168.1.192
+    gateway: 192.168.1.1
     subnet: 255.255.255.0
-    dns1: !secret dns_ip
+    dns1: 192.168.1.1
+
+button:
+  - platform: restart
+    name: "Reiniciar ESP32"
+    id: reiniciar_esp32
+    icon: "mdi:restart"
 
 binary_sensor:
   - platform: gpio
@@ -47,6 +56,15 @@ binary_sensor:
         input: true
     id: pin_datos
     internal: true
+
+sensor:
+  - platform: template
+    name: "Latencia Estimada"
+    id: latencia_estimada
+    unit_of_measurement: "ms"
+    accuracy_decimals: 0
+    icon: "mdi:timer-outline"
+    state_class: measurement
 
 globals:
   - id: test_en_curso
@@ -100,6 +118,24 @@ select:
           }
 
 number:
+  - platform: template
+    name: "Velocidad de Transición"
+    id: velocidad_transicion
+    unit_of_measurement: "s"
+    icon: "mdi:transition"
+    min_value: 0.0
+    max_value: 1.5
+    step: 0.05
+    initial_value: 0.0
+    mode: slider
+    optimistic: true
+    restore_value: true
+    on_value:
+      - lambda: |-
+          float val = id(velocidad_transicion).state;
+          float lat = 65.0f + (val * 1000.0f);
+          id(latencia_estimada).publish_state(lat);
+
   - platform: template
     name: "360° Rotation"
     id: rotacion_offset
@@ -166,9 +202,10 @@ script:
       r: int
       g: int
       b: int
+      trans: float
     then:
       - lambda: |-
-          ESP_LOGI("ha_send", "EVENT -> %s: R=%d G=%d B=%d", entidad.c_str(), r, g, b);
+          ESP_LOGI("ha_send", "EVENT -> %s: R=%d G=%d B=%d (trans=%.2fs)", entidad.c_str(), r, g, b, trans);
       - homeassistant.event:
           event: esphome.ambilight_color
           data:
@@ -176,6 +213,7 @@ script:
             r: !lambda "return std::to_string(r);"
             g: !lambda "return std::to_string(g);"
             b: !lambda "return std::to_string(b);"
+            transition: !lambda 'return str_sprintf("%.2f", trans);'
 
 interval:
   - interval: 40ms
@@ -184,7 +222,7 @@ interval:
           static int fIzqR = -1, fIzqG = -1, fIzqB = -1;
           static int fSupR = -1, fSupG = -1, fSupB = -1;
           static int fCenR = -1, fCenG = -1, fCenB = -1;
-          static int fDerR = -1, fDerG = -1, fDerB = -1;
+          static int fDerR = -1, fDerR_dummy = -1, fDerG = -1, fDerB = -1;
 
           static int pIzqR = -1, pIzqG = -1, pIzqB = -1;
           static int pSupR = -1, pSupG = -1, pSupB = -1;
@@ -278,7 +316,6 @@ interval:
           int cenG = sG_cen / nInf;
           int cenB = sB_cen / nInf;
 
-          // RESPUESTA INSTANTANEA: Aplicacion directa del color real sin retardo
           fIzqR = izqR; fIzqG = izqG; fIzqB = izqB;
           fSupR = supR; fSupG = supG; fSupB = supB;
           fCenR = cenR; fCenG = cenG; fCenB = cenB;
@@ -293,26 +330,33 @@ interval:
           uint32_t now = millis();
           bool force = (now - lastForceSend > 2500);
 
-          // Disparo inmediato ante cambios (delta >= 7) respetando una cadencia maxima de 60ms por bombilla
-          if ((force || abs(fIzqR - pIzqR) >= 7 || abs(fIzqG - pIzqG) >= 7 || abs(fIzqB - pIzqB) >= 7) && (now - lastSendIzq >= 60 || force)) {
-            id(enviar_color_ha)->execute("light.comedor_luces_izquierda", fIzqR, fIzqG, fIzqB);
+          float trans = id(velocidad_transicion).state;
+          uint32_t minInterval = 60;
+          if (trans > 0.01f) {
+            minInterval = (uint32_t)(trans * 750.0f);
+            if (minInterval < 60) minInterval = 60;
+          }
+
+          // Disparo ante cambios respetando la cadencia de transicion
+          if ((force || abs(fIzqR - pIzqR) >= 7 || abs(fIzqG - pIzqG) >= 7 || abs(fIzqB - pIzqB) >= 7) && (now - lastSendIzq >= minInterval || force)) {
+            id(enviar_color_ha)->execute("light.comedor_luces_izquierda", fIzqR, fIzqG, fIzqB, trans);
             pIzqR = fIzqR; pIzqG = fIzqG; pIzqB = fIzqB;
             lastSendIzq = now;
           }
-          if ((force || abs(fDerR - pDerR) >= 7 || abs(fDerG - pDerG) >= 7 || abs(fDerB - pDerB) >= 7) && (now - lastSendDer >= 60 || force)) {
-            id(enviar_color_ha)->execute("light.comedor_luces_derecha", fDerR, fDerG, fDerB);
+          if ((force || abs(fDerR - pDerR) >= 7 || abs(fDerG - pDerG) >= 7 || abs(fDerB - pDerB) >= 7) && (now - lastSendDer >= minInterval || force)) {
+            id(enviar_color_ha)->execute("light.comedor_luces_derecha", fDerR, fDerG, fDerB, trans);
             pDerR = fDerR; pDerG = fDerG; pDerB = fDerB;
             lastSendDer = now;
           }
-          if ((force || abs(fCenR - pCenR) >= 7 || abs(fCenG - pCenG) >= 7 || abs(fCenB - pCenB) >= 7) && (now - lastSendCen >= 60 || force)) {
-            id(enviar_color_ha)->execute("light.comedor_luces_centro", fCenR, fCenG, fCenB);
+          if ((force || abs(fCenR - pCenR) >= 7 || abs(fCenG - pCenG) >= 7 || abs(fCenB - pCenB) >= 7) && (now - lastSendCen >= minInterval || force)) {
+            id(enviar_color_ha)->execute("light.comedor_luces_centro", fCenR, fCenG, fCenB, trans);
             pCenR = fCenR; pCenG = fCenG; pCenB = fCenB;
             lastSendCen = now;
           }
 
           if (id(activar_techo).state) {
-            if ((force || abs(fSupR - pSupR) >= 7 || abs(fSupG - pSupG) >= 7 || abs(fSupB - pSupB) >= 7) && (now - lastSendSup >= 60 || force)) {
-              id(enviar_color_ha)->execute("light.comedor_luces_techo", fSupR, fSupG, fSupB);
+            if ((force || abs(fSupR - pSupR) >= 7 || abs(fSupG - pSupG) >= 7 || abs(fSupB - pSupB) >= 7) && (now - lastSendSup >= minInterval || force)) {
+              id(enviar_color_ha)->execute("light.comedor_luces_techo", fSupR, fSupG, fSupB, trans);
               pSupR = fSupR; pSupG = fSupG; pSupB = fSupB;
               lastSendSup = now;
             }
@@ -321,10 +365,9 @@ interval:
 
           static uint32_t tLog = 0;
           if (millis() - tLog >= 1000) {
-            ESP_LOGI("ambilight", "LEDs: %d | L0(G:%d,R:%d,B:%d) L1(G:%d,R:%d,B:%d) | IZQ(R:%d,G:%d,B:%d) CEN(R:%d,G:%d,B:%d) DER(R:%d,G:%d,B:%d)",
+            ESP_LOGI("ambilight", "LEDs: %d | IZQ(R:%d,G:%d,B:%d) CEN(R:%d,G:%d,B:%d) DER(R:%d,G:%d,B:%d) | Trans: %.2fs (Lat: %.0fms)",
                      ledsLeidos,
-                     ledData[0], ledData[1], ledData[2],
-                     ledData[3], ledData[4], ledData[5],
-                     fIzqR, fIzqG, fIzqB, fCenR, fCenG, fCenB, fDerR, fDerG, fDerB);
+                     fIzqR, fIzqG, fIzqB, fCenR, fCenG, fCenB, fDerR, fDerG, fDerB,
+                     trans, 65.0f + (trans * 1000.0f));
             tLog = millis();
           }
