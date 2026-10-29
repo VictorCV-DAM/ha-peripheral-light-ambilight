@@ -278,102 +278,46 @@ interval:
           int cenG = sG_cen / nInf;
           int cenB = sB_cen / nInf;
 
-          static int cIzqR = -1, cIzqG = -1, cIzqB = -1;
-          static int cSupR = -1, cSupG = -1, cSupB = -1;
-          static int cDerR = -1, cDerG = -1, cDerB = -1;
-          static int cCenR = -1, cCenG = -1, cCenB = -1;
-
-          if (fIzqR >= 0) {
-            // Filtro Anti-Glitch: Rechazar saltos bruscos aislados (>40) que no se confirmen en 2 tramas consecutivas
-            if ((abs(izqR - fIzqR) > 40 || abs(izqG - fIzqG) > 40 || abs(izqB - fIzqB) > 40) &&
-                (abs(izqR - cIzqR) > 25 || abs(izqG - cIzqG) > 25 || abs(izqB - cIzqB) > 25)) {
-              cIzqR = izqR; cIzqG = izqG; cIzqB = izqB;
-              izqR = fIzqR; izqG = fIzqG; izqB = fIzqB;
-            } else {
-              cIzqR = izqR; cIzqG = izqG; cIzqB = izqB;
-            }
-
-            if ((abs(derR - fDerR) > 40 || abs(derG - fDerG) > 40 || abs(derB - fDerB) > 40) &&
-                (abs(derR - cDerR) > 25 || abs(derG - cDerG) > 25 || abs(derB - cDerB) > 25)) {
-              cDerR = derR; cDerG = derG; cDerB = derB;
-              derR = fDerR; derG = fDerG; derB = fDerB;
-            } else {
-              cDerR = derR; cDerG = derG; cDerB = derB;
-            }
-
-            if ((abs(cenR - fCenR) > 40 || abs(cenG - fCenG) > 40 || abs(cenB - fCenB) > 40) &&
-                (abs(cenR - cCenR) > 25 || abs(cenG - cCenG) > 25 || abs(cenB - cCenB) > 25)) {
-              cCenR = cenR; cCenG = cenG; cCenB = cenB;
-              cenR = fCenR; cenG = fCenG; cenB = fCenB;
-            } else {
-              cCenR = cenR; cCenG = cenG; cCenB = cenB;
-            }
-
-            if ((abs(supR - fSupR) > 40 || abs(supG - fSupG) > 40 || abs(supB - fSupB) > 40) &&
-                (abs(supR - cSupR) > 25 || abs(supG - cSupG) > 25 || abs(supB - cSupB) > 25)) {
-              cSupR = supR; cSupG = supG; cSupB = supB;
-              supR = fSupR; supG = fSupG; supB = fSupB;
-            } else {
-              cSupR = supR; cSupG = supG; cSupB = supB;
-            }
-          }
-
-          // Filtro Ultra-Reactivo (Respuesta instantanea para cine y reproduccion en directo)
-          if (fIzqR < 0) {
-            fIzqR = izqR; fIzqG = izqG; fIzqB = izqB;
-            fSupR = supR; fSupG = supG; fSupB = supB;
-            fCenR = cenR; fCenG = cenG; fCenB = cenB;
-            fDerR = derR; fDerG = derG; fDerB = derB;
-          } else {
-            fIzqR = (fIzqR * 2 + izqR * 8) / 10;
-            fIzqG = (fIzqG * 2 + izqG * 8) / 10;
-            fIzqB = (fIzqB * 2 + izqB * 8) / 10;
-
-            fSupR = (fSupR * 2 + supR * 8) / 10;
-            fSupG = (fSupG * 2 + supG * 8) / 10;
-            fSupB = (fSupB * 2 + supB * 8) / 10;
-
-            fCenR = (fCenR * 2 + cenR * 8) / 10;
-            fCenG = (fCenG * 2 + cenG * 8) / 10;
-            fCenB = (fCenB * 2 + cenB * 8) / 10;
-
-            fDerR = (fDerR * 2 + derR * 8) / 10;
-            fDerG = (fDerG * 2 + derG * 8) / 10;
-            fDerB = (fDerB * 2 + derB * 8) / 10;
-          }
+          // RESPUESTA INSTANTANEA: Aplicacion directa del color real sin retardo
+          fIzqR = izqR; fIzqG = izqG; fIzqB = izqB;
+          fSupR = supR; fSupG = supG; fSupB = supB;
+          fCenR = cenR; fCenG = cenG; fCenB = cenB;
+          fDerR = derR; fDerG = derG; fDerB = derB;
 
           static uint32_t lastSendIzq = 0;
           static uint32_t lastSendDer = 0;
           static uint32_t lastSendCen = 0;
           static uint32_t lastSendSup = 0;
           static uint32_t lastForceSend = 0;
-          bool force = (millis() - lastForceSend > 2500);
 
-          // Control de tasa de 70ms por bombilla: cambio instantaneo sin saturar la red Wi-Fi
-          if ((force || abs(fIzqR - pIzqR) >= 6 || abs(fIzqG - pIzqG) >= 6 || abs(fIzqB - pIzqB) >= 6) && (millis() - lastSendIzq >= 70 || force)) {
+          uint32_t now = millis();
+          bool force = (now - lastForceSend > 2500);
+
+          // Disparo inmediato ante cambios (delta >= 7) respetando una cadencia maxima de 60ms por bombilla
+          if ((force || abs(fIzqR - pIzqR) >= 7 || abs(fIzqG - pIzqG) >= 7 || abs(fIzqB - pIzqB) >= 7) && (now - lastSendIzq >= 60 || force)) {
             id(enviar_color_ha)->execute("light.comedor_luces_izquierda", fIzqR, fIzqG, fIzqB);
             pIzqR = fIzqR; pIzqG = fIzqG; pIzqB = fIzqB;
-            lastSendIzq = millis();
+            lastSendIzq = now;
           }
-          if ((force || abs(fDerR - pDerR) >= 6 || abs(fDerG - pDerG) >= 6 || abs(fDerB - pDerB) >= 6) && (millis() - lastSendDer >= 70 || force)) {
+          if ((force || abs(fDerR - pDerR) >= 7 || abs(fDerG - pDerG) >= 7 || abs(fDerB - pDerB) >= 7) && (now - lastSendDer >= 60 || force)) {
             id(enviar_color_ha)->execute("light.comedor_luces_derecha", fDerR, fDerG, fDerB);
             pDerR = fDerR; pDerG = fDerG; pDerB = fDerB;
-            lastSendDer = millis();
+            lastSendDer = now;
           }
-          if ((force || abs(fCenR - pCenR) >= 6 || abs(fCenG - pCenG) >= 6 || abs(fCenB - pCenB) >= 6) && (millis() - lastSendCen >= 70 || force)) {
+          if ((force || abs(fCenR - pCenR) >= 7 || abs(fCenG - pCenG) >= 7 || abs(fCenB - pCenB) >= 7) && (now - lastSendCen >= 60 || force)) {
             id(enviar_color_ha)->execute("light.comedor_luces_centro", fCenR, fCenG, fCenB);
             pCenR = fCenR; pCenG = fCenG; pCenB = fCenB;
-            lastSendCen = millis();
+            lastSendCen = now;
           }
 
           if (id(activar_techo).state) {
-            if ((force || abs(fSupR - pSupR) >= 6 || abs(fSupG - pSupG) >= 6 || abs(fSupB - pSupB) >= 6) && (millis() - lastSendSup >= 70 || force)) {
+            if ((force || abs(fSupR - pSupR) >= 7 || abs(fSupG - pSupG) >= 7 || abs(fSupB - pSupB) >= 7) && (now - lastSendSup >= 60 || force)) {
               id(enviar_color_ha)->execute("light.comedor_luces_techo", fSupR, fSupG, fSupB);
               pSupR = fSupR; pSupG = fSupG; pSupB = fSupB;
-              lastSendSup = millis();
+              lastSendSup = now;
             }
           }
-          if (force) lastForceSend = millis();
+          if (force) lastForceSend = now;
 
           static uint32_t tLog = 0;
           if (millis() - tLog >= 1000) {
