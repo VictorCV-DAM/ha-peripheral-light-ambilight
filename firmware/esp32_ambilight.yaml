@@ -4,6 +4,12 @@ esphome:
   friendly_name: Ambilight Govee Bridge
   includes:
     - govee_sniffer.h
+  on_boot:
+    priority: -100
+    then:
+      - delay: 2s
+      - homeassistant.service:
+          service: automation.reload
 
 esp32:
   board: esp32-c3-devkitm-1
@@ -312,51 +318,59 @@ interval:
             }
           }
 
-          // 70/30 IIR Temporal Smoothing Filter
+          // Filtro Ultra-Reactivo (Respuesta instantanea para cine y reproduccion en directo)
           if (fIzqR < 0) {
             fIzqR = izqR; fIzqG = izqG; fIzqB = izqB;
             fSupR = supR; fSupG = supG; fSupB = supB;
             fCenR = cenR; fCenG = cenG; fCenB = cenB;
             fDerR = derR; fDerG = derG; fDerB = derB;
           } else {
-            fIzqR = (fIzqR * 7 + izqR * 3) / 10;
-            fIzqG = (fIzqG * 7 + izqG * 3) / 10;
-            fIzqB = (fIzqB * 7 + izqB * 3) / 10;
+            fIzqR = (fIzqR * 2 + izqR * 8) / 10;
+            fIzqG = (fIzqG * 2 + izqG * 8) / 10;
+            fIzqB = (fIzqB * 2 + izqB * 8) / 10;
 
-            fSupR = (fSupR * 7 + supR * 3) / 10;
-            fSupG = (fSupG * 7 + supG * 3) / 10;
-            fSupB = (fSupB * 7 + supB * 3) / 10;
+            fSupR = (fSupR * 2 + supR * 8) / 10;
+            fSupG = (fSupG * 2 + supG * 8) / 10;
+            fSupB = (fSupB * 2 + supB * 8) / 10;
 
-            fCenR = (fCenR * 7 + cenR * 3) / 10;
-            fCenG = (fCenG * 7 + cenG * 3) / 10;
-            fCenB = (fCenB * 7 + cenB * 3) / 10;
+            fCenR = (fCenR * 2 + cenR * 8) / 10;
+            fCenG = (fCenG * 2 + cenG * 8) / 10;
+            fCenB = (fCenB * 2 + cenB * 8) / 10;
 
-            fDerR = (fDerR * 7 + derR * 3) / 10;
-            fDerG = (fDerG * 7 + derG * 3) / 10;
-            fDerB = (fDerB * 7 + derB * 3) / 10;
+            fDerR = (fDerR * 2 + derR * 8) / 10;
+            fDerG = (fDerG * 2 + derG * 8) / 10;
+            fDerB = (fDerB * 2 + derB * 8) / 10;
           }
 
+          static uint32_t lastSendIzq = 0;
+          static uint32_t lastSendDer = 0;
+          static uint32_t lastSendCen = 0;
+          static uint32_t lastSendSup = 0;
           static uint32_t lastForceSend = 0;
           bool force = (millis() - lastForceSend > 2500);
 
-          // Histéresis de 6 puntos o refresco periódico de 2.5s
-          if (force || abs(fIzqR - pIzqR) >= 6 || abs(fIzqG - pIzqG) >= 6 || abs(fIzqB - pIzqB) >= 6) {
+          // Control de tasa de 70ms por bombilla: cambio instantaneo sin saturar la red Wi-Fi
+          if ((force || abs(fIzqR - pIzqR) >= 6 || abs(fIzqG - pIzqG) >= 6 || abs(fIzqB - pIzqB) >= 6) && (millis() - lastSendIzq >= 70 || force)) {
             id(enviar_color_ha)->execute("light.comedor_luces_izquierda", fIzqR, fIzqG, fIzqB);
             pIzqR = fIzqR; pIzqG = fIzqG; pIzqB = fIzqB;
+            lastSendIzq = millis();
           }
-          if (force || abs(fDerR - pDerR) >= 6 || abs(fDerG - pDerG) >= 6 || abs(fDerB - pDerB) >= 6) {
+          if ((force || abs(fDerR - pDerR) >= 6 || abs(fDerG - pDerG) >= 6 || abs(fDerB - pDerB) >= 6) && (millis() - lastSendDer >= 70 || force)) {
             id(enviar_color_ha)->execute("light.comedor_luces_derecha", fDerR, fDerG, fDerB);
             pDerR = fDerR; pDerG = fDerG; pDerB = fDerB;
+            lastSendDer = millis();
           }
-          if (force || abs(fCenR - pCenR) >= 6 || abs(fCenG - pCenG) >= 6 || abs(fCenB - pCenB) >= 6) {
+          if ((force || abs(fCenR - pCenR) >= 6 || abs(fCenG - pCenG) >= 6 || abs(fCenB - pCenB) >= 6) && (millis() - lastSendCen >= 70 || force)) {
             id(enviar_color_ha)->execute("light.comedor_luces_centro", fCenR, fCenG, fCenB);
             pCenR = fCenR; pCenG = fCenG; pCenB = fCenB;
+            lastSendCen = millis();
           }
 
           if (id(activar_techo).state) {
-            if (force || abs(fSupR - pSupR) >= 6 || abs(fSupG - pSupG) >= 6 || abs(fSupB - pSupB) >= 6) {
+            if ((force || abs(fSupR - pSupR) >= 6 || abs(fSupG - pSupG) >= 6 || abs(fSupB - pSupB) >= 6) && (millis() - lastSendSup >= 70 || force)) {
               id(enviar_color_ha)->execute("light.comedor_luces_techo", fSupR, fSupG, fSupB);
               pSupR = fSupR; pSupG = fSupG; pSupB = fSupB;
+              lastSendSup = millis();
             }
           }
           if (force) lastForceSend = millis();
