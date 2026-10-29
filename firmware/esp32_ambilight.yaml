@@ -191,16 +191,12 @@ interval:
             return;
           }
 
-          static portMUX_TYPE myMutex = portMUX_INITIALIZER_UNLOCKED;
-
-          const int MAX_LEDS = 38;
+          const int MAX_LEDS = 37;
           uint8_t ledData[MAX_LEDS * 3] = {0};
 
-          taskENTER_CRITICAL(&myMutex);
           int ledsLeidos = capture_govee_frame(ledData, MAX_LEDS);
-          taskEXIT_CRITICAL(&myMutex);
 
-          if (ledsLeidos < 30) return;
+          if (ledsLeidos < 37) return;
 
           float rotDeg = id(rotacion_offset).state;
           int offset = (int)roundf(rotDeg * 36.0f / 360.0f);
@@ -275,6 +271,46 @@ interval:
           int cenR = sR_cen / nInf;
           int cenG = sG_cen / nInf;
           int cenB = sB_cen / nInf;
+
+          static int cIzqR = -1, cIzqG = -1, cIzqB = -1;
+          static int cSupR = -1, cSupG = -1, cSupB = -1;
+          static int cDerR = -1, cDerG = -1, cDerB = -1;
+          static int cCenR = -1, cCenG = -1, cCenB = -1;
+
+          if (fIzqR >= 0) {
+            // Filtro Anti-Glitch: Rechazar saltos bruscos aislados (>40) que no se confirmen en 2 tramas consecutivas
+            if ((abs(izqR - fIzqR) > 40 || abs(izqG - fIzqG) > 40 || abs(izqB - fIzqB) > 40) &&
+                (abs(izqR - cIzqR) > 25 || abs(izqG - cIzqG) > 25 || abs(izqB - cIzqB) > 25)) {
+              cIzqR = izqR; cIzqG = izqG; cIzqB = izqB;
+              izqR = fIzqR; izqG = fIzqG; izqB = fIzqB;
+            } else {
+              cIzqR = izqR; cIzqG = izqG; cIzqB = izqB;
+            }
+
+            if ((abs(derR - fDerR) > 40 || abs(derG - fDerG) > 40 || abs(derB - fDerB) > 40) &&
+                (abs(derR - cDerR) > 25 || abs(derG - cDerG) > 25 || abs(derB - cDerB) > 25)) {
+              cDerR = derR; cDerG = derG; cDerB = derB;
+              derR = fDerR; derG = fDerG; derB = fDerB;
+            } else {
+              cDerR = derR; cDerG = derG; cDerB = derB;
+            }
+
+            if ((abs(cenR - fCenR) > 40 || abs(cenG - fCenG) > 40 || abs(cenB - fCenB) > 40) &&
+                (abs(cenR - cCenR) > 25 || abs(cenG - cCenG) > 25 || abs(cenB - cCenB) > 25)) {
+              cCenR = cenR; cCenG = cenG; cCenB = cenB;
+              cenR = fCenR; cenG = fCenG; cenB = fCenB;
+            } else {
+              cCenR = cenR; cCenG = cenG; cCenB = cenB;
+            }
+
+            if ((abs(supR - fSupR) > 40 || abs(supG - fSupG) > 40 || abs(supB - fSupB) > 40) &&
+                (abs(supR - cSupR) > 25 || abs(supG - cSupG) > 25 || abs(supB - cSupB) > 25)) {
+              cSupR = supR; cSupG = supG; cSupB = supB;
+              supR = fSupR; supG = fSupG; supB = fSupB;
+            } else {
+              cSupR = supR; cSupG = supG; cSupB = supB;
+            }
+          }
 
           // 70/30 IIR Temporal Smoothing Filter
           if (fIzqR < 0) {

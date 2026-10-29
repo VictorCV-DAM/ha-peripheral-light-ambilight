@@ -11,11 +11,11 @@
 
 static portMUX_TYPE goveeMutex = portMUX_INITIALIZER_UNLOCKED;
 
-// Decodificador WS2811 de Ultra-Precision para Govee T1 (H6199)
+// Decodificador WS2811 de Ultra-Precision para Govee T1 (H6199) - 37 LEDs (912/888 bits)
 IRAM_ATTR inline int capture_govee_frame(uint8_t *ledData, int maxLeds) {
     uint32_t tStart = esp_cpu_get_cycle_count();
 
-    // 1. Asegurar que la linea este conectada
+    // 1. Asegurar que la linea este activa
     while (!(*GOVEE_GPIO_IN & GOVEE_PIN_MASK)) {
         if (esp_cpu_get_cycle_count() - tStart > 3200000) return 0; // 20ms
     }
@@ -39,10 +39,10 @@ IRAM_ATTR inline int capture_govee_frame(uint8_t *ledData, int maxLeds) {
 
     if (!resetDetected) return 0;
 
-    // 3. Entrar en seccion critica (desactiva interrupciones durante los 1.1ms de trama)
+    // 3. Entrar en seccion critica: desactiva interrupciones durante la transmision de ~1.1ms
     taskENTER_CRITICAL(&goveeMutex);
 
-    // 4. Esperar al flanco de subida del primer bit con filtro de glitch
+    // 4. Esperar al flanco de subida del primer bit con filtro antirruido
     uint32_t tRise = 0;
     uint32_t tWaitFirst = esp_cpu_get_cycle_count();
     while (1) {
@@ -53,14 +53,13 @@ IRAM_ATTR inline int capture_govee_frame(uint8_t *ledData, int maxLeds) {
             }
         }
         tRise = esp_cpu_get_cycle_count();
-        // Verificar que el pulso alto dure al menos 20 ciclos (125ns) para filtrar ruido
-        while (esp_cpu_get_cycle_count() - tRise < 20);
+        while (esp_cpu_get_cycle_count() - tRise < 20); // 125ns glitch filter
         if (*GOVEE_GPIO_IN & GOVEE_PIN_MASK) {
-            break; // Pulso valido: es el Bit 7 de LED 0
+            break; // Pulso valido: Bit 7 de LED 0
         }
     }
 
-    // 5. Muestreo WS2811 por punto medio (530ns desde flanco de subida)
+    // 5. Muestreo WS2811 por punto medio (530ns tras flanco)
     int ledsRead = 0;
     bool frameDone = false;
 
@@ -70,25 +69,32 @@ IRAM_ATTR inline int capture_govee_frame(uint8_t *ledData, int maxLeds) {
             for (int bit = 7; bit >= 0; bit--) {
                 if (!(i == 0 && c == 0 && bit == 7)) {
                     uint32_t tWaitRise = esp_cpu_get_cycle_count();
-                    while (!(*GOVEE_GPIO_IN & GOVEE_PIN_MASK)) {
-                        if (esp_cpu_get_cycle_count() - tWaitRise > 3200) { // 20us timeout
-                            frameDone = true;
-                            break;
+                    while (1) {
+                        while (!(*GOVEE_GPIO_IN & GOVEE_PIN_MASK)) {
+                            if (esp_cpu_get_cycle_count() - tWaitRise > 3200) { // 20us timeout
+                                frameDone = true;
+                                break;
+                            }
+                        }
+                        if (frameDone) break;
+                        tRise = esp_cpu_get_cycle_count();
+                        while (esp_cpu_get_cycle_count() - tRise < 15); // 95ns glitch filter
+                        if (*GOVEE_GPIO_IN & GOVEE_PIN_MASK) {
+                            break; // Flanco real confirmado
                         }
                     }
                     if (frameDone) break;
-                    tRise = esp_cpu_get_cycle_count();
                 }
 
-                // Esperar exactamente al punto medio del bit (85 ciclos = ~530ns)
+                // Punto medio del bit (85 ciclos = ~530ns)
                 while (esp_cpu_get_cycle_count() - tRise < 85);
 
-                // Muestrear pin
+                // Muestrear valor
                 if (*GOVEE_GPIO_IN & GOVEE_PIN_MASK) {
                     byteVal |= (1 << bit);
                 }
 
-                // Esperar caida a nivel BAJO
+                // Esperar caida a BAJO
                 uint32_t tWaitFall = esp_cpu_get_cycle_count();
                 while (*GOVEE_GPIO_IN & GOVEE_PIN_MASK) {
                     if (esp_cpu_get_cycle_count() - tWaitFall > 3200) { // 20us timeout
@@ -97,10 +103,6 @@ IRAM_ATTR inline int capture_govee_frame(uint8_t *ledData, int maxLeds) {
                     }
                 }
                 if (frameDone) break;
-
-                // 30 ciclos (~180ns) de proteccion contra rebote de linea
-                uint32_t tSettle = esp_cpu_get_cycle_count();
-                while (esp_cpu_get_cycle_count() - tSettle < 30);
             }
             if (frameDone) break;
             ledData[i * 3 + c] = byteVal;
