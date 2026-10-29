@@ -10,9 +10,13 @@ esphome:
       - delay: 2s
       - homeassistant.service:
           service: automation.reload
+      - homeassistant.service:
+          service: script.reload
       - lambda: |-
           float val = id(velocidad_transicion).state;
-          id(latencia_estimada).publish_state(65.0f + (val * 1000.0f));
+          float lat = 65.0f + (val * 1000.0f);
+          id(latencia_estimada).publish_state(lat);
+          id(latencia_media_registrada).publish_state(lat);
 
 esp32:
   board: esp32-c3-devkitm-1
@@ -47,7 +51,14 @@ button:
     name: "Reiniciar ESP32"
     id: reiniciar_esp32
     icon: "mdi:restart"
-    entity_category: config
+
+  - platform: template
+    name: "Ver Pantalla de Registros"
+    id: btn_abrir_registros
+    icon: "mdi:console-network"
+    on_press:
+      - homeassistant.service:
+          service: script.ver_pantalla_de_registros
 
 binary_sensor:
   - platform: gpio
@@ -66,40 +77,52 @@ sensor:
     accuracy_decimals: 0
     icon: "mdi:timer-outline"
     state_class: measurement
-    entity_category: diagnostic
+
+  - platform: template
+    name: "Última Latencia Media"
+    id: latencia_media_registrada
+    unit_of_measurement: "ms"
+    accuracy_decimals: 0
+    icon: "mdi:chart-timeline-variant"
+    state_class: measurement
 
 globals:
   - id: test_en_curso
     type: bool
     restore_value: no
     initial_value: 'false'
+  - id: lat_sum
+    type: float
+    initial_value: '0.0'
+  - id: lat_count
+    type: uint32_t
+    initial_value: '0'
 
 switch:
   - platform: template
-    name: "Ambilight Mode"
+    name: "1. Modo Ambilight"
     id: modo_ambilight
     icon: "mdi:television-ambient-light"
     optimistic: true
     restore_mode: RESTORE_DEFAULT_ON
 
   - platform: template
-    name: "Enable Ceiling Light (Top Edge)"
+    name: "3. Luz de Techo"
     id: activar_techo
     icon: "mdi:ceiling-light"
     optimistic: true
     restore_mode: RESTORE_DEFAULT_OFF
 
   - platform: template
-    name: "Invert Rotation Direction"
+    name: "Giro: Invertir Sentido"
     id: invertir_sentido
     icon: "mdi:rotate-left-variant"
     optimistic: true
     restore_mode: RESTORE_DEFAULT_OFF
-    entity_category: config
 
 number:
   - platform: template
-    name: "Velocidad de Transición"
+    name: "2. Velocidad de Transición"
     id: velocidad_transicion
     unit_of_measurement: "s"
     icon: "mdi:transition"
@@ -117,7 +140,55 @@ number:
           id(latencia_estimada).publish_state(lat);
 
   - platform: template
-    name: "360° Rotation"
+    name: "Borde 1 - Izquierda (LEDs)"
+    id: num_leds_izq
+    icon: "mdi:arrow-left-bold-box-outline"
+    min_value: 4
+    max_value: 12
+    step: 1
+    initial_value: 7
+    mode: slider
+    optimistic: true
+    restore_value: true
+
+  - platform: template
+    name: "Borde 2 - Superior (LEDs)"
+    id: num_leds_sup
+    icon: "mdi:arrow-up-bold-box-outline"
+    min_value: 6
+    max_value: 16
+    step: 1
+    initial_value: 11
+    mode: slider
+    optimistic: true
+    restore_value: true
+
+  - platform: template
+    name: "Borde 3 - Derecha (LEDs)"
+    id: num_leds_der
+    icon: "mdi:arrow-right-bold-box-outline"
+    min_value: 4
+    max_value: 12
+    step: 1
+    initial_value: 7
+    mode: slider
+    optimistic: true
+    restore_value: true
+
+  - platform: template
+    name: "Borde 4 - Inferior (LEDs)"
+    id: num_leds_inf
+    icon: "mdi:arrow-down-bold-box-outline"
+    min_value: 6
+    max_value: 16
+    step: 1
+    initial_value: 11
+    mode: slider
+    optimistic: true
+    restore_value: true
+
+  - platform: template
+    name: "Giro: Rotación 360°"
     id: rotacion_offset
     unit_of_measurement: "°"
     icon: "mdi:rotate-360"
@@ -128,59 +199,6 @@ number:
     mode: slider
     optimistic: true
     restore_value: true
-    entity_category: config
-
-  - platform: template
-    name: "Left Edge LEDs"
-    id: num_leds_izq
-    icon: "mdi:arrow-left-bold-box-outline"
-    min_value: 4
-    max_value: 12
-    step: 1
-    initial_value: 7
-    mode: slider
-    optimistic: true
-    restore_value: true
-    entity_category: config
-
-  - platform: template
-    name: "Top Edge LEDs (Ceiling)"
-    id: num_leds_sup
-    icon: "mdi:arrow-up-bold-box-outline"
-    min_value: 6
-    max_value: 16
-    step: 1
-    initial_value: 11
-    mode: slider
-    optimistic: true
-    restore_value: true
-    entity_category: config
-
-  - platform: template
-    name: "Right Edge LEDs"
-    id: num_leds_der
-    icon: "mdi:arrow-right-bold-box-outline"
-    min_value: 4
-    max_value: 12
-    step: 1
-    initial_value: 7
-    mode: slider
-    optimistic: true
-    restore_value: true
-    entity_category: config
-
-  - platform: template
-    name: "Bottom Edge LEDs (Center)"
-    id: num_leds_inf
-    icon: "mdi:arrow-down-bold-box-outline"
-    min_value: 6
-    max_value: 16
-    step: 1
-    initial_value: 11
-    mode: slider
-    optimistic: true
-    restore_value: true
-    entity_category: config
 
 script:
   - id: enviar_color_ha
@@ -205,6 +223,19 @@ script:
             transition: !lambda 'return str_sprintf("%.2f", trans);'
 
 interval:
+  - interval: 20s
+    then:
+      - lambda: |-
+          if (id(lat_count) > 0) {
+            float avg = id(lat_sum) / (float)id(lat_count);
+            id(latencia_media_registrada).publish_state(roundf(avg));
+          } else {
+            float base = 65.0f + (id(velocidad_transicion).state * 1000.0f);
+            id(latencia_media_registrada).publish_state(roundf(base));
+          }
+          id(lat_sum) = 0.0f;
+          id(lat_count) = 0;
+
   - interval: 40ms
     then:
       - lambda: |-
@@ -223,6 +254,8 @@ interval:
             pIzqR = -1; pSupR = -1; pCenR = -1; pDerR = -1;
             return;
           }
+
+          uint32_t tLoopStart = millis();
 
           const int MAX_LEDS = 37;
           uint8_t ledData[MAX_LEDS * 3] = {0};
@@ -326,21 +359,26 @@ interval:
             if (minInterval < 60) minInterval = 60;
           }
 
+          bool sentAny = false;
+
           // Disparo ante cambios respetando la cadencia de transicion
           if ((force || abs(fIzqR - pIzqR) >= 7 || abs(fIzqG - pIzqG) >= 7 || abs(fIzqB - pIzqB) >= 7) && (now - lastSendIzq >= minInterval || force)) {
             id(enviar_color_ha)->execute("light.comedor_luces_izquierda", fIzqR, fIzqG, fIzqB, trans);
             pIzqR = fIzqR; pIzqG = fIzqG; pIzqB = fIzqB;
             lastSendIzq = now;
+            sentAny = true;
           }
           if ((force || abs(fDerR - pDerR) >= 7 || abs(fDerG - pDerG) >= 7 || abs(fDerB - pDerB) >= 7) && (now - lastSendDer >= minInterval || force)) {
             id(enviar_color_ha)->execute("light.comedor_luces_derecha", fDerR, fDerG, fDerB, trans);
             pDerR = fDerR; pDerG = fDerG; pDerB = fDerB;
             lastSendDer = now;
+            sentAny = true;
           }
           if ((force || abs(fCenR - pCenR) >= 7 || abs(fCenG - pCenG) >= 7 || abs(fCenB - pCenB) >= 7) && (now - lastSendCen >= minInterval || force)) {
             id(enviar_color_ha)->execute("light.comedor_luces_centro", fCenR, fCenG, fCenB, trans);
             pCenR = fCenR; pCenG = fCenG; pCenB = fCenB;
             lastSendCen = now;
+            sentAny = true;
           }
 
           if (id(activar_techo).state) {
@@ -348,9 +386,17 @@ interval:
               id(enviar_color_ha)->execute("light.comedor_luces_techo", fSupR, fSupG, fSupB, trans);
               pSupR = fSupR; pSupG = fSupG; pSupB = fSupB;
               lastSendSup = now;
+              sentAny = true;
             }
           }
           if (force) lastForceSend = now;
+
+          if (sentAny) {
+            uint32_t elapsed = millis() - tLoopStart;
+            float measuredLat = 65.0f + (float)elapsed + (trans * 1000.0f);
+            id(lat_sum) += measuredLat;
+            id(lat_count)++;
+          }
 
           static uint32_t tLog = 0;
           if (millis() - tLog >= 1000) {
