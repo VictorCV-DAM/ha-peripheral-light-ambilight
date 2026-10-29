@@ -47,6 +47,7 @@ button:
     name: "Reiniciar ESP32"
     id: reiniciar_esp32
     icon: "mdi:restart"
+    entity_category: config
 
 binary_sensor:
   - platform: gpio
@@ -65,6 +66,7 @@ sensor:
     accuracy_decimals: 0
     icon: "mdi:timer-outline"
     state_class: measurement
+    entity_category: diagnostic
 
 globals:
   - id: test_en_curso
@@ -79,43 +81,21 @@ switch:
     icon: "mdi:television-ambient-light"
     optimistic: true
     restore_mode: RESTORE_DEFAULT_ON
-    on_turn_on:
-      - lambda: |-
-          id(modo_luces).publish_state("Ambilight");
-    on_turn_off:
-      - lambda: |-
-          id(modo_luces).publish_state("Custom");
-
-  - platform: template
-    name: "Invert Rotation Direction"
-    id: invertir_sentido
-    optimistic: true
-    restore_mode: RESTORE_DEFAULT_OFF
 
   - platform: template
     name: "Enable Ceiling Light (Top Edge)"
     id: activar_techo
+    icon: "mdi:ceiling-light"
     optimistic: true
     restore_mode: RESTORE_DEFAULT_OFF
 
-select:
   - platform: template
-    name: "Mode Selector"
-    id: modo_luces
-    icon: "mdi:tune-variant"
-    options:
-      - "Ambilight"
-      - "Custom"
-    initial_option: "Ambilight"
+    name: "Invert Rotation Direction"
+    id: invertir_sentido
+    icon: "mdi:rotate-left-variant"
     optimistic: true
-    restore_value: true
-    set_action:
-      - lambda: |-
-          if (x == "Ambilight") {
-            id(modo_ambilight).publish_state(true);
-          } else {
-            id(modo_ambilight).publish_state(false);
-          }
+    restore_mode: RESTORE_DEFAULT_OFF
+    entity_category: config
 
 number:
   - platform: template
@@ -148,10 +128,12 @@ number:
     mode: slider
     optimistic: true
     restore_value: true
+    entity_category: config
 
   - platform: template
     name: "Left Edge LEDs"
     id: num_leds_izq
+    icon: "mdi:arrow-left-bold-box-outline"
     min_value: 4
     max_value: 12
     step: 1
@@ -159,10 +141,12 @@ number:
     mode: slider
     optimistic: true
     restore_value: true
+    entity_category: config
 
   - platform: template
     name: "Top Edge LEDs (Ceiling)"
     id: num_leds_sup
+    icon: "mdi:arrow-up-bold-box-outline"
     min_value: 6
     max_value: 16
     step: 1
@@ -170,10 +154,12 @@ number:
     mode: slider
     optimistic: true
     restore_value: true
+    entity_category: config
 
   - platform: template
     name: "Right Edge LEDs"
     id: num_leds_der
+    icon: "mdi:arrow-right-bold-box-outline"
     min_value: 4
     max_value: 12
     step: 1
@@ -181,10 +167,12 @@ number:
     mode: slider
     optimistic: true
     restore_value: true
+    entity_category: config
 
   - platform: template
     name: "Bottom Edge LEDs (Center)"
     id: num_leds_inf
+    icon: "mdi:arrow-down-bold-box-outline"
     min_value: 6
     max_value: 16
     step: 1
@@ -192,6 +180,7 @@ number:
     mode: slider
     optimistic: true
     restore_value: true
+    entity_category: config
 
 script:
   - id: enviar_color_ha
@@ -222,7 +211,7 @@ interval:
           static int fIzqR = -1, fIzqG = -1, fIzqB = -1;
           static int fSupR = -1, fSupG = -1, fSupB = -1;
           static int fCenR = -1, fCenG = -1, fCenB = -1;
-          static int fDerR = -1, fDerR_dummy = -1, fDerG = -1, fDerB = -1;
+          static int fDerR = -1, fDerG = -1, fDerB = -1;
 
           static int pIzqR = -1, pIzqG = -1, pIzqB = -1;
           static int pSupR = -1, pSupG = -1, pSupB = -1;
