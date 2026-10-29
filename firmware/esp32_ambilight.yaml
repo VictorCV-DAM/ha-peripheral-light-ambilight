@@ -249,9 +249,14 @@ interval:
           static int pCenR = -1, pCenG = -1, pCenB = -1;
           static int pDerR = -1, pDerG = -1, pDerB = -1;
 
+          static uint32_t tDiag = 0;
           if (id(test_en_curso) || !id(modo_ambilight).state) {
             fIzqR = -1; fSupR = -1; fCenR = -1; fDerR = -1;
             pIzqR = -1; pSupR = -1; pCenR = -1; pDerR = -1;
+            if (millis() - tDiag >= 3000) {
+              ESP_LOGI("sniffer", "PAUSADO: Modo Ambilight está APAGADO en Home Assistant.");
+              tDiag = millis();
+            }
             return;
           }
 
@@ -262,7 +267,13 @@ interval:
 
           int ledsLeidos = capture_govee_frame(ledData, MAX_LEDS);
 
-          if (ledsLeidos < 37) return;
+          if (ledsLeidos < 37) {
+            if (millis() - tDiag >= 2000) {
+              ESP_LOGW("sniffer", "Trama incompleta o sin señal: %d/37 leds (GPIO3=%d).", ledsLeidos, id(pin_datos).state);
+              tDiag = millis();
+            }
+            return;
+          }
 
           float rotDeg = id(rotacion_offset).state;
           int offset = (int)roundf(rotDeg * 36.0f / 360.0f);

@@ -21,7 +21,7 @@ IRAM_ATTR inline int capture_govee_frame(uint8_t *ledData, int maxLeds) {
     }
 
     // 2. Esperar al silencio de reset: la linea debe mantenerse en BAJO continuo
-    // durante al menos 40.000 ciclos (250 us). Si hay cualquier pulso, se reinicia la cuenta.
+    // durante al menos 12.000 ciclos (75 us para WS2811 estándar).
     bool resetDetected = false;
     while (esp_cpu_get_cycle_count() - tStart < 8000000) { // 50ms max
         while (*GOVEE_GPIO_IN & GOVEE_PIN_MASK) {
@@ -29,7 +29,7 @@ IRAM_ATTR inline int capture_govee_frame(uint8_t *ledData, int maxLeds) {
         }
         uint32_t tLow = esp_cpu_get_cycle_count();
         while (!(*GOVEE_GPIO_IN & GOVEE_PIN_MASK)) {
-            if (esp_cpu_get_cycle_count() - tLow > 40000) { // 250us en bajo
+            if (esp_cpu_get_cycle_count() - tLow > 12000) { // 75us en bajo (estándar WS2811)
                 resetDetected = true;
                 break;
             }
@@ -71,7 +71,7 @@ IRAM_ATTR inline int capture_govee_frame(uint8_t *ledData, int maxLeds) {
                     uint32_t tWaitRise = esp_cpu_get_cycle_count();
                     while (1) {
                         while (!(*GOVEE_GPIO_IN & GOVEE_PIN_MASK)) {
-                            if (esp_cpu_get_cycle_count() - tWaitRise > 3200) { // 20us timeout
+                            if (esp_cpu_get_cycle_count() - tWaitRise > 4800) { // 30us timeout
                                 frameDone = true;
                                 break;
                             }
