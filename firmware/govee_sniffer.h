@@ -39,16 +39,13 @@ IRAM_ATTR inline int capture_govee_frame(uint8_t *ledData, int maxLeds) {
 
     if (!resetDetected) return 0;
 
-    // 3. Entrar en seccion critica: desactiva interrupciones durante la transmision de ~1.1ms
-    taskENTER_CRITICAL(&goveeMutex);
-
-    // 4. Esperar al flanco de subida del primer bit con filtro antirruido
+    // 3. Esperar al flanco de subida del primer bit (INICIO DE NUEVA TRAMA)
+    // Se espera FUERA de la seccion critica con un timeout de 45ms (~25-30 FPS)
     uint32_t tRise = 0;
     uint32_t tWaitFirst = esp_cpu_get_cycle_count();
     while (1) {
         while (!(*GOVEE_GPIO_IN & GOVEE_PIN_MASK)) {
-            if (esp_cpu_get_cycle_count() - tWaitFirst > 320000) { // 2ms timeout
-                taskEXIT_CRITICAL(&goveeMutex);
+            if (esp_cpu_get_cycle_count() - tWaitFirst > 7200000) { // 45ms timeout
                 return 0;
             }
         }
@@ -58,6 +55,10 @@ IRAM_ATTR inline int capture_govee_frame(uint8_t *ledData, int maxLeds) {
             break; // Pulso valido: Bit 7 de LED 0
         }
     }
+
+    // 4. AHORA QUE LA TRAMA HA EMPEZADO: Entramos en seccion critica
+    // Solo desactiva interrupciones durante los ~1.1ms de la lectura de 37 LEDs
+    taskENTER_CRITICAL(&goveeMutex);
 
     // 5. Muestreo WS2811 por punto medio (530ns tras flanco)
     int ledsRead = 0;
