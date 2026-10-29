@@ -15,21 +15,18 @@ static portMUX_TYPE goveeMutex = portMUX_INITIALIZER_UNLOCKED;
 IRAM_ATTR inline int capture_govee_frame(uint8_t *ledData, int maxLeds) {
     uint32_t tStart = esp_cpu_get_cycle_count();
 
-    // 1. Asegurar que la linea este activa
-    while (!(*GOVEE_GPIO_IN & GOVEE_PIN_MASK)) {
-        if (esp_cpu_get_cycle_count() - tStart > 3200000) return 0; // 20ms
-    }
-
-    // 2. Esperar al silencio de reset: la linea debe mantenerse en BAJO continuo
-    // durante al menos 12.000 ciclos (75 us para WS2811 estándar).
+    // 1. Detectar el silencio de RESET (linea mantenida en BAJO durante > 60us)
+    // Damos hasta 60ms (9.600.000 ciclos a 160MHz) para capturar el ciclo completo
     bool resetDetected = false;
-    while (esp_cpu_get_cycle_count() - tStart < 8000000) { // 50ms max
+    while (esp_cpu_get_cycle_count() - tStart < 9600000) {
+        // Si la linea esta en ALTO (en medio de una transmision), esperamos a que caiga a BAJO
         while (*GOVEE_GPIO_IN & GOVEE_PIN_MASK) {
-            if (esp_cpu_get_cycle_count() - tStart > 8000000) return 0;
+            if (esp_cpu_get_cycle_count() - tStart > 9600000) return 0;
         }
+        // Medir si permanece en BAJO de forma continua por mas de 60us (9600 ciclos)
         uint32_t tLow = esp_cpu_get_cycle_count();
         while (!(*GOVEE_GPIO_IN & GOVEE_PIN_MASK)) {
-            if (esp_cpu_get_cycle_count() - tLow > 12000) { // 75us en bajo (estándar WS2811)
+            if (esp_cpu_get_cycle_count() - tLow > 9600) { // >60us en bajo continuo = Reset WS2811
                 resetDetected = true;
                 break;
             }
@@ -39,28 +36,28 @@ IRAM_ATTR inline int capture_govee_frame(uint8_t *ledData, int maxLeds) {
 
     if (!resetDetected) return 0;
 
-    // 3. Esperar al flanco de subida del primer bit (INICIO DE NUEVA TRAMA)
-    // Se espera FUERA de la seccion critica con un timeout de 45ms (~25-30 FPS)
-    uint32_t tRise = 0;
+    // 2. Esperar el PRIMER FLANCO DE SUBIDA (Inicio de la nueva trama: Bit 7 de LED 0)
+    // Se espera FUERA de seccion critica para no interferir con FreeRTOS ni WiFi
     uint32_t tWaitFirst = esp_cpu_get_cycle_count();
+    uint32_t tRise = 0;
     while (1) {
         while (!(*GOVEE_GPIO_IN & GOVEE_PIN_MASK)) {
-            if (esp_cpu_get_cycle_count() - tWaitFirst > 7200000) { // 45ms timeout
+            if (esp_cpu_get_cycle_count() - tWaitFirst > 9600000) { // 60ms timeout
                 return 0;
             }
         }
         tRise = esp_cpu_get_cycle_count();
-        while (esp_cpu_get_cycle_count() - tRise < 20); // 125ns glitch filter
+        while (esp_cpu_get_cycle_count() - tRise < 20); // 125ns filtro glitch
         if (*GOVEE_GPIO_IN & GOVEE_PIN_MASK) {
-            break; // Pulso valido: Bit 7 de LED 0
+            break; // Flanco de subida confirmado!
         }
     }
 
-    // 4. AHORA QUE LA TRAMA HA EMPEZADO: Entramos en seccion critica
-    // Solo desactiva interrupciones durante los ~1.1ms de la lectura de 37 LEDs
+    // 3. AHORA QUE LA TRAMA HA COMENZADO: Entramos en seccion critica
+    // Solo bloquea durante los 1.1ms que tarda la transmision de los 37 LEDs
     taskENTER_CRITICAL(&goveeMutex);
 
-    // 5. Muestreo WS2811 por punto medio (530ns tras flanco)
+    // 4. Muestreo WS2811 por punto medio (530ns tras flanco)
     int ledsRead = 0;
     bool frameDone = false;
 
@@ -72,7 +69,7 @@ IRAM_ATTR inline int capture_govee_frame(uint8_t *ledData, int maxLeds) {
                     uint32_t tWaitRise = esp_cpu_get_cycle_count();
                     while (1) {
                         while (!(*GOVEE_GPIO_IN & GOVEE_PIN_MASK)) {
-                            if (esp_cpu_get_cycle_count() - tWaitRise > 4800) { // 30us timeout
+                            if (esp_cpu_get_cycle_count() - tWaitRise > 4800) { // 30us timeout fin de trama
                                 frameDone = true;
                                 break;
                             }
@@ -98,7 +95,7 @@ IRAM_ATTR inline int capture_govee_frame(uint8_t *ledData, int maxLeds) {
                 // Esperar caida a BAJO
                 uint32_t tWaitFall = esp_cpu_get_cycle_count();
                 while (*GOVEE_GPIO_IN & GOVEE_PIN_MASK) {
-                    if (esp_cpu_get_cycle_count() - tWaitFall > 3200) { // 20us timeout
+                    if (esp_cpu_get_cycle_count() - tWaitFall > 4800) { // 30us timeout
                         frameDone = true;
                         break;
                     }
