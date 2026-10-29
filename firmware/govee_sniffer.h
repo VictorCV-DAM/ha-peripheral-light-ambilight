@@ -1,69 +1,106 @@
 #pragma once
 #include "esp_attr.h"
 #include "esp_cpu.h"
+#include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/portmacro.h"
 #include <stdint.h>
 
 #define GOVEE_PIN_MASK 0x08 // GPIO3
 #define GOVEE_GPIO_IN ((volatile uint32_t *)0x6000403C)
 
-// Exact 6aa3e61 mid-point sniffer with reset threshold adjusted to 80,000 cycles (500us)
-IRAM_ATTR inline int capture_govee_frame(uint8_t *ledData, int maxLeds) {
-    uint32_t tSearchStart = esp_cpu_get_cycle_count();
-    bool inReset = false;
+static portMUX_TYPE goveeMutex = portMUX_INITIALIZER_UNLOCKED;
 
-    // Buscar reset durante máx 60ms (9.6 millones de ciclos)
-    while (esp_cpu_get_cycle_count() - tSearchStart < 9600000) {
-        if (!(*GOVEE_GPIO_IN & GOVEE_PIN_MASK)) {
-            uint32_t tLowStart = esp_cpu_get_cycle_count();
-            while (!(*GOVEE_GPIO_IN & GOVEE_PIN_MASK)) {
-                if (esp_cpu_get_cycle_count() - tLowStart > 80000) { // >500us en bajo
-                    inReset = true;
-                    break;
-                }
+// Decodificador WS2811 de Ultra-Precision para Govee T1 (H6199)
+IRAM_ATTR inline int capture_govee_frame(uint8_t *ledData, int maxLeds) {
+    uint32_t tStart = esp_cpu_get_cycle_count();
+
+    // 1. Asegurar que la linea este conectada
+    while (!(*GOVEE_GPIO_IN & GOVEE_PIN_MASK)) {
+        if (esp_cpu_get_cycle_count() - tStart > 3200000) return 0; // 20ms
+    }
+
+    // 2. Esperar al silencio de reset: la linea debe mantenerse en BAJO continuo
+    // durante al menos 40.000 ciclos (250 us). Si hay cualquier pulso, se reinicia la cuenta.
+    bool resetDetected = false;
+    while (esp_cpu_get_cycle_count() - tStart < 8000000) { // 50ms max
+        while (*GOVEE_GPIO_IN & GOVEE_PIN_MASK) {
+            if (esp_cpu_get_cycle_count() - tStart > 8000000) return 0;
+        }
+        uint32_t tLow = esp_cpu_get_cycle_count();
+        while (!(*GOVEE_GPIO_IN & GOVEE_PIN_MASK)) {
+            if (esp_cpu_get_cycle_count() - tLow > 40000) { // 250us en bajo
+                resetDetected = true;
+                break;
             }
-            if (inReset) break;
+        }
+        if (resetDetected) break;
+    }
+
+    if (!resetDetected) return 0;
+
+    // 3. Entrar en seccion critica (desactiva interrupciones durante los 1.1ms de trama)
+    taskENTER_CRITICAL(&goveeMutex);
+
+    // 4. Esperar al flanco de subida del primer bit con filtro de glitch
+    uint32_t tRise = 0;
+    uint32_t tWaitFirst = esp_cpu_get_cycle_count();
+    while (1) {
+        while (!(*GOVEE_GPIO_IN & GOVEE_PIN_MASK)) {
+            if (esp_cpu_get_cycle_count() - tWaitFirst > 320000) { // 2ms timeout
+                taskEXIT_CRITICAL(&goveeMutex);
+                return 0;
+            }
+        }
+        tRise = esp_cpu_get_cycle_count();
+        // Verificar que el pulso alto dure al menos 20 ciclos (125ns) para filtrar ruido
+        while (esp_cpu_get_cycle_count() - tRise < 20);
+        if (*GOVEE_GPIO_IN & GOVEE_PIN_MASK) {
+            break; // Pulso valido: es el Bit 7 de LED 0
         }
     }
 
-    if (!inReset) return 0;
-
+    // 5. Muestreo WS2811 por punto medio (530ns desde flanco de subida)
     int ledsRead = 0;
     bool frameDone = false;
 
-    // 2. Muestreo de bits por punto medio (mid-point sampling a 90 ciclos)
     for (int i = 0; i < maxLeds; i++) {
         for (int c = 0; c < 3; c++) {
             uint8_t byteVal = 0;
             for (int bit = 7; bit >= 0; bit--) {
-                // A. Esperar flanco de subida (0 -> 1)
-                uint32_t tWaitRise = esp_cpu_get_cycle_count();
-                while (!(*GOVEE_GPIO_IN & GOVEE_PIN_MASK)) {
-                    if (esp_cpu_get_cycle_count() - tWaitRise > 200000) {
-                        frameDone = true;
-                        break;
+                if (!(i == 0 && c == 0 && bit == 7)) {
+                    uint32_t tWaitRise = esp_cpu_get_cycle_count();
+                    while (!(*GOVEE_GPIO_IN & GOVEE_PIN_MASK)) {
+                        if (esp_cpu_get_cycle_count() - tWaitRise > 3200) { // 20us timeout
+                            frameDone = true;
+                            break;
+                        }
                     }
+                    if (frameDone) break;
+                    tRise = esp_cpu_get_cycle_count();
                 }
-                if (frameDone) break;
 
-                uint32_t tRise = esp_cpu_get_cycle_count();
+                // Esperar exactamente al punto medio del bit (85 ciclos = ~530ns)
+                while (esp_cpu_get_cycle_count() - tRise < 85);
 
-                // B. Esperar exactamente al punto medio del bit (90 ciclos = 560ns)
-                while (esp_cpu_get_cycle_count() - tRise < 90);
-
-                // C. Muestrear el pin en el punto medio
+                // Muestrear pin
                 if (*GOVEE_GPIO_IN & GOVEE_PIN_MASK) {
                     byteVal |= (1 << bit);
                 }
 
-                // D. Esperar a que el pin vuelva a nivel BAJO
+                // Esperar caida a nivel BAJO
                 uint32_t tWaitFall = esp_cpu_get_cycle_count();
                 while (*GOVEE_GPIO_IN & GOVEE_PIN_MASK) {
-                    if (esp_cpu_get_cycle_count() - tWaitFall > 2500) {
+                    if (esp_cpu_get_cycle_count() - tWaitFall > 3200) { // 20us timeout
                         frameDone = true;
                         break;
                     }
                 }
                 if (frameDone) break;
+
+                // 30 ciclos (~180ns) de proteccion contra rebote de linea
+                uint32_t tSettle = esp_cpu_get_cycle_count();
+                while (esp_cpu_get_cycle_count() - tSettle < 30);
             }
             if (frameDone) break;
             ledData[i * 3 + c] = byteVal;
@@ -72,5 +109,6 @@ IRAM_ATTR inline int capture_govee_frame(uint8_t *ledData, int maxLeds) {
         ledsRead++;
     }
 
+    taskEXIT_CRITICAL(&goveeMutex);
     return ledsRead;
 }
