@@ -361,10 +361,70 @@ interval:
           int cenG = sG_cen / nInf;
           int cenB = sB_cen / nInf;
 
-          fIzqR = izqR; fIzqG = izqG; fIzqB = izqB;
-          fSupR = supR; fSupG = supG; fSupB = supB;
-          fCenR = cenR; fCenG = cenG; fCenB = cenB;
-          fDerR = derR; fDerG = derG; fDerB = derB;
+          // Filtro Anti-Glitch: Rechazar saltos bruscos aislados (>25) que no se confirmen en 2 tramas consecutivas
+          static int cIzqR = -1, cIzqG = -1, cIzqB = -1;
+          static int cSupR = -1, cSupG = -1, cSupB = -1;
+          static int cDerR = -1, cDerG = -1, cDerB = -1;
+          static int cCenR = -1, cCenG = -1, cCenB = -1;
+
+          if (fIzqR >= 0) {
+            if ((abs(izqR - fIzqR) > 25 || abs(izqG - fIzqG) > 25 || abs(izqB - fIzqB) > 25) &&
+                (abs(izqR - cIzqR) > 15 || abs(izqG - cIzqG) > 15 || abs(izqB - cIzqB) > 15)) {
+              cIzqR = izqR; cIzqG = izqG; cIzqB = izqB;
+              izqR = fIzqR; izqG = fIzqG; izqB = fIzqB;
+            } else {
+              cIzqR = izqR; cIzqG = izqG; cIzqB = izqB;
+            }
+
+            if ((abs(derR - fDerR) > 25 || abs(derG - fDerG) > 25 || abs(derB - fDerB) > 25) &&
+                (abs(derR - cDerR) > 15 || abs(derG - cDerG) > 15 || abs(derB - cDerB) > 15)) {
+              cDerR = derR; cDerG = derG; cDerB = derB;
+              derR = fDerR; derG = fDerG; derB = fDerB;
+            } else {
+              cDerR = derR; cDerG = derG; cDerB = derB;
+            }
+
+            if ((abs(cenR - fCenR) > 25 || abs(cenG - fCenG) > 25 || abs(cenB - fCenB) > 25) &&
+                (abs(cenR - cCenR) > 15 || abs(cenG - cCenG) > 15 || abs(cenB - cCenB) > 15)) {
+              cCenR = cenR; cCenG = cenG; cCenB = cenB;
+              cenR = fCenR; cenG = fCenG; cenB = fCenB;
+            } else {
+              cCenR = cenR; cCenG = cenG; cCenB = cenB;
+            }
+
+            if ((abs(supR - fSupR) > 25 || abs(supG - fSupG) > 25 || abs(supB - fSupB) > 25) &&
+                (abs(supR - cSupR) > 15 || abs(supG - cSupG) > 15 || abs(supB - cSupB) > 15)) {
+              cSupR = supR; cSupG = supG; cSupB = supB;
+              supR = fSupR; supG = fSupG; supB = fSupB;
+            } else {
+              cSupR = supR; cSupG = supG; cSupB = supB;
+            }
+          }
+
+          // Suavizado temporal IIR (75/25): elimina el parpadeo de +-10 del sensor de cámara en estático
+          // pero responde en el primer fotograma (40ms) ante cambios reales de escena.
+          if (fIzqR < 0) {
+            fIzqR = izqR; fIzqG = izqG; fIzqB = izqB;
+            fSupR = supR; fSupG = supG; fSupB = supB;
+            fCenR = cenR; fCenG = cenG; fCenB = cenB;
+            fDerR = derR; fDerG = derG; fDerB = derB;
+          } else {
+            fIzqR = (fIzqR * 3 + izqR) / 4;
+            fIzqG = (fIzqG * 3 + izqG) / 4;
+            fIzqB = (fIzqB * 3 + izqB) / 4;
+
+            fSupR = (fSupR * 3 + supR) / 4;
+            fSupG = (fSupG * 3 + supG) / 4;
+            fSupB = (fSupB * 3 + supB) / 4;
+
+            fCenR = (fCenR * 3 + cenR) / 4;
+            fCenG = (fCenG * 3 + cenG) / 4;
+            fCenB = (fCenB * 3 + cenB) / 4;
+
+            fDerR = (fDerR * 3 + derR) / 4;
+            fDerG = (fDerG * 3 + derG) / 4;
+            fDerB = (fDerB * 3 + derB) / 4;
+          }
 
           static uint32_t lastSendIzq = 0;
           static uint32_t lastSendDer = 0;
@@ -373,7 +433,7 @@ interval:
           static uint32_t lastForceSend = 0;
 
           uint32_t now = millis();
-          bool force = (now - lastForceSend > 2500);
+          bool force = (now - lastForceSend > 15000);
 
           float trans = id(velocidad_transicion).state;
           uint32_t minInterval = 60;
@@ -384,20 +444,28 @@ interval:
 
           bool sentAny = false;
 
-          // Disparo ante cambios respetando la cadencia de transicion
-          if ((force || abs(fIzqR - pIzqR) >= 7 || abs(fIzqG - pIzqG) >= 7 || abs(fIzqB - pIzqB) >= 7) && (now - lastSendIzq >= minInterval || force)) {
+          // Disparo ante cambios reales (delta >= 12)
+          bool chgIzq = (abs(fIzqR - pIzqR) >= 12 || abs(fIzqG - pIzqG) >= 12 || abs(fIzqB - pIzqB) >= 12);
+          if ((chgIzq || (force && (abs(fIzqR - pIzqR) >= 4 || abs(fIzqG - pIzqG) >= 4 || abs(fIzqB - pIzqB) >= 4))) &&
+              (now - lastSendIzq >= minInterval || (force && chgIzq))) {
             id(enviar_color_ha)->execute("light.comedor_luces_izquierda", fIzqR, fIzqG, fIzqB, trans);
             pIzqR = fIzqR; pIzqG = fIzqG; pIzqB = fIzqB;
             lastSendIzq = now;
             sentAny = true;
           }
-          if ((force || abs(fDerR - pDerR) >= 7 || abs(fDerG - pDerG) >= 7 || abs(fDerB - pDerB) >= 7) && (now - lastSendDer >= minInterval || force)) {
+
+          bool chgDer = (abs(fDerR - pDerR) >= 12 || abs(fDerG - pDerG) >= 12 || abs(fDerB - pDerB) >= 12);
+          if ((chgDer || (force && (abs(fDerR - pDerR) >= 4 || abs(fDerG - pDerG) >= 4 || abs(fDerB - pDerB) >= 4))) &&
+              (now - lastSendDer >= minInterval || (force && chgDer))) {
             id(enviar_color_ha)->execute("light.comedor_luces_derecha", fDerR, fDerG, fDerB, trans);
             pDerR = fDerR; pDerG = fDerG; pDerB = fDerB;
             lastSendDer = now;
             sentAny = true;
           }
-          if ((force || abs(fCenR - pCenR) >= 7 || abs(fCenG - pCenG) >= 7 || abs(fCenB - pCenB) >= 7) && (now - lastSendCen >= minInterval || force)) {
+
+          bool chgCen = (abs(fCenR - pCenR) >= 12 || abs(fCenG - pCenG) >= 12 || abs(fCenB - pCenB) >= 12);
+          if ((chgCen || (force && (abs(fCenR - pCenR) >= 4 || abs(fCenG - pCenG) >= 4 || abs(fCenB - pCenB) >= 4))) &&
+              (now - lastSendCen >= minInterval || (force && chgCen))) {
             id(enviar_color_ha)->execute("light.comedor_luces_centro", fCenR, fCenG, fCenB, trans);
             pCenR = fCenR; pCenG = fCenG; pCenB = fCenB;
             lastSendCen = now;
@@ -405,7 +473,9 @@ interval:
           }
 
           if (id(activar_techo).state) {
-            if ((force || abs(fSupR - pSupR) >= 7 || abs(fSupG - pSupG) >= 7 || abs(fSupB - pSupB) >= 7) && (now - lastSendSup >= minInterval || force)) {
+            bool chgSup = (abs(fSupR - pSupR) >= 12 || abs(fSupG - pSupG) >= 12 || abs(fSupB - pSupB) >= 12);
+            if ((chgSup || (force && (abs(fSupR - pSupR) >= 4 || abs(fSupG - pSupG) >= 4 || abs(fSupB - pSupB) >= 4))) &&
+                (now - lastSendSup >= minInterval || (force && chgSup))) {
               id(enviar_color_ha)->execute("light.comedor_luces_techo", fSupR, fSupG, fSupB, trans);
               pSupR = fSupR; pSupG = fSupG; pSupB = fSupB;
               lastSendSup = now;
