@@ -119,6 +119,13 @@ switch:
     restore_mode: RESTORE_DEFAULT_OFF
 
   - platform: template
+    name: "4. Blackout Mode"
+    id: modo_blackout
+    icon: "mdi:lightbulb-off-outline"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+
+  - platform: template
     name: "Rotation: Invert Direction"
     id: invertir_sentido
     icon: "mdi:rotate-left-variant"
