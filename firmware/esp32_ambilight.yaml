@@ -9,6 +9,10 @@ esphome:
     then:
       - delay: 2s
       - homeassistant.service:
+          service: homeassistant.reload_all
+      - homeassistant.service:
+          service: input_boolean.reload
+      - homeassistant.service:
           service: automation.reload
       - homeassistant.service:
           service: script.reload
