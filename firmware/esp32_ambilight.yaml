@@ -302,20 +302,10 @@ interval:
             }
             prevFrameTime = now;
           } else {
-            // Si la línea está en silencio:
-            // Si estábamos en Vídeo y la señal se interrumpe durante más de 1.5s -> Standby
-            if (currentMode == "Vídeo" && (now - lastValidFrameTime > 1500)) {
+            // Si la línea está en silencio durante más de 3 segundos -> Standby
+            if (currentSignalActive && (now - lastValidFrameTime > 3000)) {
               currentMode = "Standby";
               currentSignalActive = false;
-              videoStreamStreak = 0;
-              id(govee_signal_active).publish_state(false);
-              id(govee_hardware_state).publish_state("Standby");
-            }
-            // Si estábamos en Estático (luz fija de lámpara) y pasan más de 30s sin señal -> Standby
-            else if (currentMode == "Estático" && (now - lastValidFrameTime > 30000)) {
-              currentMode = "Standby";
-              currentSignalActive = false;
-              videoStreamStreak = 0;
               id(govee_signal_active).publish_state(false);
               id(govee_hardware_state).publish_state("Standby");
             }
@@ -416,38 +406,27 @@ interval:
 
           int totalSpread = (maxR - minR) + (maxG - minG) + (maxB - minB);
 
-          // En color estático de lámpara (como el rojo actual), la diferencia entre zonas es <= 45
+          // En color estático de lámpara (como rojo fijo), totalSpread <= 45
           bool isUniform = (totalSpread <= 45);
-          // Modo vídeo real transmite a ~30 FPS constantes (dt entre 25 y 70ms)
-          bool isHighRate = (lastFrameInterval > 0 && lastFrameInterval <= 70);
-
-          if (isHighRate && !isUniform && !isBlack) {
-            videoStreamStreak++;
-          } else {
-            videoStreamStreak = 0;
-          }
 
           std::string newMode = currentMode;
           bool newSignal = currentSignalActive;
 
-          if (isBlack && !isHighRate) {
+          if (isBlack) {
             newMode = "Standby";
             newSignal = false;
-            videoStreamStreak = 0;
-          } else if (isUniform && !isBlack) {
+          } else if (isUniform) {
             newMode = "Estático";
             newSignal = true;
-            videoStreamStreak = 0;
-          } else if (videoStreamStreak >= 10) {
+          } else {
+            // totalSpread > 45: colores distintos entre las zonas de la pantalla (cámara / vídeo activo)
             newMode = "Vídeo";
             newSignal = true;
           }
 
           static uint32_t lastDiagPrint = 0;
-          if (now - lastDiagPrint >= 500) {
-            ESP_LOGI("mode_test", "I=(%d,%d,%d) S=(%d,%d,%d) D=(%d,%d,%d) C=(%d,%d,%d) spread=%d isUnif=%d isHR=%d dt=%u streak=%d mode=%s",
-                     izqR, izqG, izqB, supR, supG, supB, derR, derG, derB, cenR, cenG, cenB,
-                     totalSpread, isUniform, isHighRate, lastFrameInterval, videoStreamStreak, currentMode.c_str());
+          if (now - lastDiagPrint >= 2000) {
+            ESP_LOGI("mode", "Govee Hardware: %s (spread=%d, isUnif=%d)", currentMode.c_str(), totalSpread, isUniform);
             lastDiagPrint = now;
           }
 
