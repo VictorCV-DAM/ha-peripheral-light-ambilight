@@ -281,10 +281,11 @@ interval:
           }
 
           static uint32_t lastValidFrameTime = 0;
-          static bool lastSignalState = false;
-          static std::string lastModeState = "Standby";
-          static uint32_t staticFramesCount = 0;
-          static int lastRawIzqR = -1, lastRawIzqG = -1, lastRawIzqB = -1;
+          static uint32_t prevFrameTime = 0;
+          static uint32_t lastFrameInterval = 0;
+          static uint32_t videoStreamStreak = 0;
+          static bool currentSignalActive = false;
+          static std::string currentMode = "Standby";
 
           uint32_t now = millis();
           uint32_t tLoopStart = now;
@@ -296,20 +297,29 @@ interval:
 
           if (ledsLeidos >= 37) {
             lastValidFrameTime = now;
-          }
-
-          bool signalActive = (now - lastValidFrameTime < 1200);
-          if (signalActive != lastSignalState) {
-            lastSignalState = signalActive;
-            id(govee_signal_active).publish_state(signalActive);
-            if (!signalActive) {
-              lastModeState = "Standby";
-              id(govee_hardware_state).publish_state("Standby");
-              staticFramesCount = 0;
+            if (prevFrameTime > 0) {
+              lastFrameInterval = now - prevFrameTime;
             }
-          }
+            prevFrameTime = now;
+          } else {
+            // Si la línea está en silencio:
+            // Si estábamos en Vídeo y la señal se interrumpe durante más de 1.5s -> Standby
+            if (currentMode == "Vídeo" && (now - lastValidFrameTime > 1500)) {
+              currentMode = "Standby";
+              currentSignalActive = false;
+              videoStreamStreak = 0;
+              id(govee_signal_active).publish_state(false);
+              id(govee_hardware_state).publish_state("Standby");
+            }
+            // Si estábamos en Estático (luz fija de lámpara) y pasan más de 30s sin señal -> Standby
+            else if (currentMode == "Estático" && (now - lastValidFrameTime > 30000)) {
+              currentMode = "Standby";
+              currentSignalActive = false;
+              videoStreamStreak = 0;
+              id(govee_signal_active).publish_state(false);
+              id(govee_hardware_state).publish_state("Standby");
+            }
 
-          if (ledsLeidos < 37) {
             if (millis() - tDiag >= 2000) {
               ESP_LOGW("sniffer", "Trama incompleta o sin señal: %d/37 leds (GPIO3=%d).", ledsLeidos, id(pin_datos).state);
               tDiag = millis();
@@ -391,24 +401,48 @@ interval:
           int cenG = sG_cen / nInf;
           int cenB = sB_cen / nInf;
 
-          // Detección del modo real de hardware (Vídeo vs Estático)
+          // Detección del estado real del hardware (Vídeo vs Estático vs Standby)
+          bool isBlack = (izqR <= 4 && izqG <= 4 && izqB <= 4 &&
+                          derR <= 4 && derG <= 4 && derB <= 4 &&
+                          supR <= 4 && supG <= 4 && supB <= 4 &&
+                          cenR <= 4 && cenG <= 4 && cenB <= 4);
+
           int zoneDelta = abs(izqR - derR) + abs(izqR - supR) + abs(derR - supR) +
                           abs(izqG - derG) + abs(izqG - supG) + abs(derG - supG) +
                           abs(izqB - derB) + abs(izqB - supB) + abs(derB - supB);
 
-          int tempDelta = (lastRawIzqR < 0) ? 0 : (abs(izqR - lastRawIzqR) + abs(izqG - lastRawIzqG) + abs(izqB - lastRawIzqB));
-          lastRawIzqR = izqR; lastRawIzqG = izqG; lastRawIzqB = izqB;
+          bool isUniform = (zoneDelta <= 8);
+          bool isHighRate = (lastFrameInterval > 0 && lastFrameInterval <= 90);
 
-          if (zoneDelta <= 6 && tempDelta == 0) {
-            staticFramesCount++;
-          } else {
-            staticFramesCount = 0;
+          if (isHighRate && (!isUniform || !isBlack)) {
+            videoStreamStreak++;
+          } else if (!isHighRate) {
+            videoStreamStreak = 0;
           }
 
-          std::string modeDetected = (staticFramesCount >= 75) ? "Estático" : "Vídeo";
-          if (modeDetected != lastModeState) {
-            lastModeState = modeDetected;
-            id(govee_hardware_state).publish_state(modeDetected);
+          std::string newMode = currentMode;
+          bool newSignal = currentSignalActive;
+
+          if (isBlack && !isHighRate) {
+            newMode = "Standby";
+            newSignal = false;
+            videoStreamStreak = 0;
+          } else if (videoStreamStreak >= 3) {
+            newMode = "Vídeo";
+            newSignal = true;
+          } else if (isUniform && !isBlack) {
+            newMode = "Estático";
+            newSignal = true;
+            videoStreamStreak = 0;
+          }
+
+          if (newMode != currentMode) {
+            currentMode = newMode;
+            id(govee_hardware_state).publish_state(currentMode);
+          }
+          if (newSignal != currentSignalActive) {
+            currentSignalActive = newSignal;
+            id(govee_signal_active).publish_state(currentSignalActive);
           }
 
           // Si el interruptor del puente está APAGADO en Home Assistant,
