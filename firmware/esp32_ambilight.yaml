@@ -21,6 +21,8 @@ esphome:
           float lat = 65.0f + (val * 1000.0f);
           id(latencia_estimada).publish_state(lat);
           id(latencia_media_registrada).publish_state(lat);
+          id(govee_signal_active).publish_state(false);
+          id(govee_hardware_state).publish_state("Standby");
 
 esp32:
   board: esp32-c3-devkitm-1
@@ -73,6 +75,18 @@ binary_sensor:
         pulldown: true
     id: pin_datos
     internal: true
+
+  - platform: template
+    name: "Govee Signal Active"
+    id: govee_signal_active
+    device_class: running
+    icon: "mdi:television-ambient-light"
+
+text_sensor:
+  - platform: template
+    name: "Govee Hardware State"
+    id: govee_hardware_state
+    icon: "mdi:television-shimmer"
 
 sensor:
   - platform: template
@@ -262,22 +276,38 @@ interval:
           static int pDerR = -1, pDerG = -1, pDerB = -1;
 
           static uint32_t tDiag = 0;
-          if (id(test_en_curso) || !id(modo_ambilight).state) {
-            fIzqR = -1; fSupR = -1; fCenR = -1; fDerR = -1;
-            pIzqR = -1; pSupR = -1; pCenR = -1; pDerR = -1;
-            if (millis() - tDiag >= 3000) {
-              ESP_LOGI("sniffer", "PAUSADO: Modo Ambilight está APAGADO en Home Assistant.");
-              tDiag = millis();
-            }
+          if (id(test_en_curso)) {
             return;
           }
 
-          uint32_t tLoopStart = millis();
+          static uint32_t lastValidFrameTime = 0;
+          static bool lastSignalState = false;
+          static std::string lastModeState = "Standby";
+          static uint32_t staticFramesCount = 0;
+          static int lastRawIzqR = -1, lastRawIzqG = -1, lastRawIzqB = -1;
+
+          uint32_t now = millis();
+          uint32_t tLoopStart = now;
 
           const int MAX_LEDS = 37;
           uint8_t ledData[MAX_LEDS * 3] = {0};
 
           int ledsLeidos = capture_govee_frame(ledData, MAX_LEDS);
+
+          if (ledsLeidos >= 37) {
+            lastValidFrameTime = now;
+          }
+
+          bool signalActive = (now - lastValidFrameTime < 1200);
+          if (signalActive != lastSignalState) {
+            lastSignalState = signalActive;
+            id(govee_signal_active).publish_state(signalActive);
+            if (!signalActive) {
+              lastModeState = "Standby";
+              id(govee_hardware_state).publish_state("Standby");
+              staticFramesCount = 0;
+            }
+          }
 
           if (ledsLeidos < 37) {
             if (millis() - tDiag >= 2000) {
@@ -361,6 +391,38 @@ interval:
           int cenG = sG_cen / nInf;
           int cenB = sB_cen / nInf;
 
+          // Detección del modo real de hardware (Vídeo vs Estático)
+          int zoneDelta = abs(izqR - derR) + abs(izqR - supR) + abs(derR - supR) +
+                          abs(izqG - derG) + abs(izqG - supG) + abs(derG - supG) +
+                          abs(izqB - derB) + abs(izqB - supB) + abs(derB - supB);
+
+          int tempDelta = (lastRawIzqR < 0) ? 0 : (abs(izqR - lastRawIzqR) + abs(izqG - lastRawIzqG) + abs(izqB - lastRawIzqB));
+          lastRawIzqR = izqR; lastRawIzqG = izqG; lastRawIzqB = izqB;
+
+          if (zoneDelta <= 6 && tempDelta == 0) {
+            staticFramesCount++;
+          } else {
+            staticFramesCount = 0;
+          }
+
+          std::string modeDetected = (staticFramesCount >= 75) ? "Estático" : "Vídeo";
+          if (modeDetected != lastModeState) {
+            lastModeState = modeDetected;
+            id(govee_hardware_state).publish_state(modeDetected);
+          }
+
+          // Si el interruptor del puente está APAGADO en Home Assistant,
+          // no enviamos nada a las bombillas secundarias (el hardware queda monitorizado sin alterar nada).
+          if (!id(modo_ambilight).state) {
+            fIzqR = -1; fSupR = -1; fCenR = -1; fDerR = -1;
+            pIzqR = -1; pSupR = -1; pCenR = -1; pDerR = -1;
+            if (millis() - tDiag >= 3000) {
+              ESP_LOGI("sniffer", "PAUSADO: Modo Ambilight está APAGADO en Home Assistant.");
+              tDiag = millis();
+            }
+            return;
+          }
+
           // Filtro Anti-Glitch: Rechazar saltos bruscos aislados (>25) que no se confirmen en 2 tramas consecutivas
           static int cIzqR = -1, cIzqG = -1, cIzqB = -1;
           static int cSupR = -1, cSupG = -1, cSupB = -1;
@@ -432,7 +494,7 @@ interval:
           static uint32_t lastSendSup = 0;
           static uint32_t lastForceSend = 0;
 
-          uint32_t now = millis();
+          now = millis();
           bool force = (now - lastForceSend > 15000);
 
           float trans = id(velocidad_transicion).state;
