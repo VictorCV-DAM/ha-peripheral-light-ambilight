@@ -407,12 +407,19 @@ interval:
                           supR <= 4 && supG <= 4 && supB <= 4 &&
                           cenR <= 4 && cenG <= 4 && cenB <= 4);
 
-          int zoneDelta = abs(izqR - derR) + abs(izqR - supR) + abs(derR - supR) +
-                          abs(izqG - derG) + abs(izqG - supG) + abs(derG - supG) +
-                          abs(izqB - derB) + abs(izqB - supB) + abs(derB - supB);
+          int maxR = std::max({izqR, supR, derR, cenR});
+          int minR = std::min({izqR, supR, derR, cenR});
+          int maxG = std::max({izqG, supG, derG, cenG});
+          int minG = std::min({izqG, supG, derG, cenG});
+          int maxB = std::max({izqB, supB, derB, cenB});
+          int minB = std::min({izqB, supB, derB, cenB});
 
-          bool isUniform = (zoneDelta <= 8);
-          bool isHighRate = (lastFrameInterval > 0 && lastFrameInterval <= 90);
+          int totalSpread = (maxR - minR) + (maxG - minG) + (maxB - minB);
+
+          // En color estático de lámpara (como el rojo actual), la diferencia entre zonas es <= 45
+          bool isUniform = (totalSpread <= 45);
+          // Modo vídeo real transmite a ~30 FPS constantes (dt entre 25 y 70ms)
+          bool isHighRate = (lastFrameInterval > 0 && lastFrameInterval <= 70);
 
           if (isHighRate && !isUniform && !isBlack) {
             videoStreamStreak++;
@@ -431,9 +438,17 @@ interval:
             newMode = "Estático";
             newSignal = true;
             videoStreamStreak = 0;
-          } else if (videoStreamStreak >= 3) {
+          } else if (videoStreamStreak >= 10) {
             newMode = "Vídeo";
             newSignal = true;
+          }
+
+          static uint32_t lastDiagPrint = 0;
+          if (now - lastDiagPrint >= 500) {
+            ESP_LOGI("mode_test", "I=(%d,%d,%d) S=(%d,%d,%d) D=(%d,%d,%d) C=(%d,%d,%d) spread=%d isUnif=%d isHR=%d dt=%u streak=%d mode=%s",
+                     izqR, izqG, izqB, supR, supG, supB, derR, derG, derB, cenR, cenG, cenB,
+                     totalSpread, isUniform, isHighRate, lastFrameInterval, videoStreamStreak, currentMode.c_str());
+            lastDiagPrint = now;
           }
 
           if (newMode != currentMode) {
