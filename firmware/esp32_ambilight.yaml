@@ -302,8 +302,8 @@ interval:
             }
             prevFrameTime = now;
           } else {
-            // Si la línea está en silencio durante más de 3 segundos -> Standby
-            if (currentSignalActive && (now - lastValidFrameTime > 3000)) {
+            // Si la línea está en silencio durante más de 4 segundos -> Standby
+            if (currentSignalActive && (now - lastValidFrameTime > 4000)) {
               currentMode = "Standby";
               currentSignalActive = false;
               id(govee_signal_active).publish_state(false);
@@ -409,34 +409,48 @@ interval:
           // En color estático de lámpara (como rojo fijo), totalSpread <= 45
           bool isUniform = (totalSpread <= 45);
 
-          std::string newMode = currentMode;
-          bool newSignal = currentSignalActive;
-
+          std::string targetCandidate = "Standby";
           if (isBlack) {
-            newMode = "Standby";
-            newSignal = false;
+            targetCandidate = "Standby";
           } else if (isUniform) {
-            newMode = "Estático";
-            newSignal = true;
+            targetCandidate = "Estático";
           } else {
-            // totalSpread > 45: colores distintos entre las zonas de la pantalla (cámara / vídeo activo)
-            newMode = "Vídeo";
-            newSignal = true;
+            targetCandidate = "Vídeo";
+          }
+
+          static std::string candidateMode = "Standby";
+          static uint32_t candidateStartTime = 0;
+
+          if (targetCandidate != candidateMode) {
+            candidateMode = targetCandidate;
+            candidateStartTime = now;
+          }
+
+          // Histéresis de confirmación:
+          // 1. Desde Vídeo hacia Estático: exige 3500ms (evita tripear en escenas uniformes de cine/logos)
+          // 2. Desde Vídeo hacia Standby: exige 4000ms (evita tripear en fundidos a negro o pausas)
+          // 3. Desde Estático hacia Vídeo: exige 800ms
+          // 4. Desde Standby hacia Vídeo o Estático: 200ms (arranque rápido)
+          uint32_t requiredHoldMs = 200;
+          if (currentMode == "Vídeo") {
+            if (candidateMode == "Estático") requiredHoldMs = 3500;
+            else if (candidateMode == "Standby") requiredHoldMs = 4000;
+          } else if (currentMode == "Estático") {
+            if (candidateMode == "Vídeo") requiredHoldMs = 800;
+            else if (candidateMode == "Standby") requiredHoldMs = 4000;
+          }
+
+          if (candidateMode != currentMode && (now - candidateStartTime >= requiredHoldMs)) {
+            currentMode = candidateMode;
+            currentSignalActive = (currentMode != "Standby");
+            id(govee_hardware_state).publish_state(currentMode);
+            id(govee_signal_active).publish_state(currentSignalActive);
           }
 
           static uint32_t lastDiagPrint = 0;
           if (now - lastDiagPrint >= 2000) {
-            ESP_LOGI("mode", "Govee Hardware: %s (spread=%d, isUnif=%d)", currentMode.c_str(), totalSpread, isUniform);
+            ESP_LOGI("mode", "Govee Hardware: %s (spread=%d, isUnif=%d, cand=%s)", currentMode.c_str(), totalSpread, isUniform, candidateMode.c_str());
             lastDiagPrint = now;
-          }
-
-          if (newMode != currentMode) {
-            currentMode = newMode;
-            id(govee_hardware_state).publish_state(currentMode);
-          }
-          if (newSignal != currentSignalActive) {
-            currentSignalActive = newSignal;
-            id(govee_signal_active).publish_state(currentSignalActive);
           }
 
           // Si el interruptor del puente está APAGADO en Home Assistant,
