@@ -414,9 +414,9 @@ interval:
           bool isUniform = (zoneDelta <= 8);
           bool isHighRate = (lastFrameInterval > 0 && lastFrameInterval <= 90);
 
-          if (isHighRate && (!isUniform || !isBlack)) {
+          if (isHighRate && !isUniform && !isBlack) {
             videoStreamStreak++;
-          } else if (!isHighRate) {
+          } else {
             videoStreamStreak = 0;
           }
 
@@ -427,13 +427,13 @@ interval:
             newMode = "Standby";
             newSignal = false;
             videoStreamStreak = 0;
-          } else if (videoStreamStreak >= 3) {
-            newMode = "Vídeo";
-            newSignal = true;
           } else if (isUniform && !isBlack) {
             newMode = "Estático";
             newSignal = true;
             videoStreamStreak = 0;
+          } else if (videoStreamStreak >= 3) {
+            newMode = "Vídeo";
+            newSignal = true;
           }
 
           if (newMode != currentMode) {
