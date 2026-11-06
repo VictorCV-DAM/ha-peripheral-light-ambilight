@@ -286,6 +286,8 @@ interval:
           static uint32_t videoStreamStreak = 0;
           static bool currentSignalActive = false;
           static std::string currentMode = "Standby";
+          static std::string candidateMode = "Standby";
+          static uint32_t candidateStartTime = 0;
 
           uint32_t now = millis();
           uint32_t tLoopStart = now;
@@ -302,9 +304,10 @@ interval:
             }
             prevFrameTime = now;
           } else {
-            // Si la línea está en silencio durante más de 4 segundos -> Standby
-            if (currentSignalActive && (now - lastValidFrameTime > 4000)) {
+            // Si la línea está en silencio absoluto durante más de 8 segundos -> Standby
+            if (currentSignalActive && (now - lastValidFrameTime > 8000)) {
               currentMode = "Standby";
+              candidateMode = "Standby";
               currentSignalActive = false;
               id(govee_signal_active).publish_state(false);
               id(govee_hardware_state).publish_state("Standby");
@@ -409,17 +412,40 @@ interval:
           // En color estático de lámpara (como rojo fijo), totalSpread <= 45
           bool isUniform = (totalSpread <= 45);
 
-          std::string targetCandidate = "Standby";
-          if (isBlack) {
-            targetCandidate = "Standby";
-          } else if (isUniform) {
-            targetCandidate = "Estático";
-          } else {
-            targetCandidate = "Vídeo";
-          }
+          int maxOverall = std::max({maxR, maxG, maxB});
+          // Lámpara de color uniforme real (no escenas oscuras de cine): debe ser uniforme y tener brillo visible (>= 40)
+          bool isBrightUniformLamp = (isUniform && maxOverall >= 40);
 
-          static std::string candidateMode = "Standby";
-          static uint32_t candidateStartTime = 0;
+          std::string targetCandidate = currentMode;
+
+          if (currentMode == "Vídeo") {
+            // Estando en Vídeo (viendo cine / TV):
+            // - Los fundidos a negro o escenas oscuras forman parte del metraje -> ¡Se queda en Vídeo!
+            // - Solo propone Estático si se activa un color de lámpara brillante y uniforme sostenido
+            if (isBrightUniformLamp) {
+              targetCandidate = "Estático";
+            } else {
+              targetCandidate = "Vídeo";
+            }
+          } else if (currentMode == "Estático") {
+            // Estando en Estático (lámpara fija):
+            // - Cambia a Vídeo si la pantalla muestra colores heterogéneos de televisión (totalSpread > 45)
+            if (!isUniform && maxOverall >= 20) {
+              targetCandidate = "Vídeo";
+            } else {
+              targetCandidate = "Estático";
+            }
+          } else {
+            // Estando en Standby (arranque desde apagado):
+            if (!isUniform && maxOverall >= 20) {
+              targetCandidate = "Vídeo";
+            } else if (isBrightUniformLamp) {
+              targetCandidate = "Estático";
+            } else {
+              // Señal presente pero oscura
+              targetCandidate = "Vídeo";
+            }
+          }
 
           if (targetCandidate != candidateMode) {
             candidateMode = targetCandidate;
@@ -427,17 +453,14 @@ interval:
           }
 
           // Histéresis de confirmación:
-          // 1. Desde Vídeo hacia Estático: exige 3500ms (evita tripear en escenas uniformes de cine/logos)
-          // 2. Desde Vídeo hacia Standby: exige 4000ms (evita tripear en fundidos a negro o pausas)
-          // 3. Desde Estático hacia Vídeo: exige 800ms
-          // 4. Desde Standby hacia Vídeo o Estático: 200ms (arranque rápido)
+          // 1. Desde Vídeo hacia Estático: exige 5 segundos continuos de lámpara uniforme real
+          // 2. Desde Estático hacia Vídeo: exige 800ms
+          // 3. Desde Standby hacia activo: 200ms (arranque rápido)
           uint32_t requiredHoldMs = 200;
           if (currentMode == "Vídeo") {
-            if (candidateMode == "Estático") requiredHoldMs = 3500;
-            else if (candidateMode == "Standby") requiredHoldMs = 4000;
+            if (candidateMode == "Estático") requiredHoldMs = 5000;
           } else if (currentMode == "Estático") {
             if (candidateMode == "Vídeo") requiredHoldMs = 800;
-            else if (candidateMode == "Standby") requiredHoldMs = 4000;
           }
 
           if (candidateMode != currentMode && (now - candidateStartTime >= requiredHoldMs)) {
