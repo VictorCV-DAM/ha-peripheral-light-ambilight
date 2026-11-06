@@ -201,6 +201,9 @@ Under the newly created device card in Home Assistant, you have full control ove
 | `switch.1_ambilight_mode` | Switch | Toggles real-time Ambilight synchronization ON / OFF (Manual Room Mode). |
 | `number.2_transition_speed` | Slider | Sets transition time (0.00s to 1.50s) between color updates for ultra-smooth shifts. |
 | `switch.3_ceiling_light` | Switch | Enables transmitting the top edge color to a dedicated ceiling light entity. |
+| `switch.4_blackout_mode` | Switch | Automatically turns peripheral lights off when the screen is completely black. |
+| `binary_sensor.govee_signal_active` | Binary Sensor | Real-time hardware transmission status (Running / Not running) detected on the wire. |
+| `sensor.govee_hardware_state` | Sensor | Clean 3-state hardware detector (`Vídeo` [Ambilight], `Estático` [Lamp mode], `Standby` [Off]). |
 | `number.rotation_360_angle` | Slider | Rotates mapping by 0° to 350° for perfect alignment with TV strip installation. |
 | `switch.rotation_invert_direction` | Switch | Inverts clockwise / counter-clockwise strip traversal direction. |
 | `number.edge_1_left_leds` | Slider | Number of LEDs sampled on the left edge (default: 7). |
@@ -235,11 +238,14 @@ The Govee T1 camera box computes corners on-the-fly, introducing internal pauses
 * **Frame Format:** 37 LEDs total (1 preamble LED + 36 active perimeter LEDs: Left=7, Top=11, Right=7, Bottom=11).
 * **Color Encoding:** Native GRB order (Byte 0 = Green, Byte 1 = Red, Byte 2 = Blue).
 
-### 4. Digital Signal Processing: 70/30 IIR Filter & 8-Point Hysteresis
+### 4. Digital Signal Processing: 75/25 IIR Filter, Outlier Gate & Temporal Hysteresis
 TV cameras inherently pick up $50/60\text{ Hz}$ room flicker and sensor noise. Without filtering, smart bulbs would flicker and flood Home Assistant:
-* **70/30 IIR Temporal Smoothing:**
-  $$F_{\text{new}} = \frac{7 \cdot F_{\text{prev}} + 3 \cdot \text{Raw}}{10}$$
-* **8-Point Noise Hysteresis:** State updates are only dispatched to Home Assistant when the color change exceeds $\Delta \ge 8$ points in any RGB channel.
+* **75/25 IIR Temporal Smoothing:**
+  $$F_{\text{new}} = \frac{3 \cdot F_{\text{prev}} + 1 \cdot \text{Raw}}{4}$$
+  Completely eliminates CMOS camera sensor jitter ($\pm 10$ LSB) while ensuring sub-40ms response on real scene transitions.
+* **2-Frame Outlier Confirmation Gate:** Rejects single-frame optical spikes and HDMI sync anomalies $(> 25\text{ points})$ unless confirmed by a consecutive frame.
+* **12-Point Noise Deadband & 15s Heartbeat:** State updates are dispatched to Home Assistant only when real changes exceed $\Delta \ge 12$ points in any RGB channel, backed by an automatic 15-second keep-alive heartbeat.
+* **Temporal Hysteresis State Machine:** Robust state engine distinguishes TV video playback, solid lamp colors, and standby with debouncing timeouts (3.5s hold for static transitions, 4.0s for standby), making it completely immune to movie cuts to black, full-screen logos, or paused video frames.
 
 ---
 
