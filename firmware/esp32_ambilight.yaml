@@ -304,8 +304,8 @@ interval:
             }
             prevFrameTime = now;
           } else {
-            // Si la línea está en silencio absoluto durante más de 8 segundos -> Standby
-            if (currentSignalActive && (now - lastValidFrameTime > 8000)) {
+            // Si la línea está en silencio absoluto durante más de 5 segundos -> Standby
+            if (currentSignalActive && (now - lastValidFrameTime > 5000)) {
               currentMode = "Standby";
               candidateMode = "Standby";
               currentSignalActive = false;
@@ -446,10 +446,14 @@ interval:
             }
           } else {
             // Estando en Standby (arranque desde apagado):
+            // Blindaje: Solo puede despertar si hay luz/color activo real (!isBlack && maxOverall >= 15).
+            // Si la tira/pantalla está apagada o en negro, PERMANECE en Standby (evita encendidos nocturnos).
             if (isPureStaticLamp) {
               targetCandidate = "Estático";
-            } else {
+            } else if (!isBlack && maxOverall >= 15) {
               targetCandidate = "Vídeo";
+            } else {
+              targetCandidate = "Standby";
             }
           }
 
@@ -461,12 +465,15 @@ interval:
           // Histéresis de confirmación:
           // 1. Desde Vídeo hacia Estático: exige 6 segundos continuos de lámpara fija matemática (tempDelta == 0)
           // 2. Desde Estático hacia Vídeo: 400ms ante cualquier señal dinámica
-          // 3. Desde Standby hacia activo: 200ms (arranque rápido)
+          // 3. Desde Standby hacia activo: 500ms con señal de luz confirmada
           uint32_t requiredHoldMs = 200;
           if (currentMode == "Vídeo") {
             if (candidateMode == "Estático") requiredHoldMs = 6000;
           } else if (currentMode == "Estático") {
             if (candidateMode == "Vídeo") requiredHoldMs = 400;
+          } else if (currentMode == "Standby") {
+            if (candidateMode == "Vídeo") requiredHoldMs = 500;
+            else if (candidateMode == "Estático") requiredHoldMs = 500;
           }
 
           if (candidateMode != currentMode && (now - candidateStartTime >= requiredHoldMs)) {
