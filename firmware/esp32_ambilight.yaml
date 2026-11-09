@@ -409,8 +409,8 @@ interval:
 
           int totalSpread = (maxR - minR) + (maxG - minG) + (maxB - minB);
 
-          // En color estático de lámpara (como rojo fijo), totalSpread <= 45
-          bool isUniform = (totalSpread <= 45);
+          // En color estático de lámpara (como rojo fijo o blanco cálido), totalSpread <= 55 por caída de tensión en 3.8m
+          bool isUniform = (totalSpread <= 55);
 
           static int prevRawIzqR = -1, prevRawIzqG = -1, prevRawIzqB = -1;
           static int prevRawDerR = -1, prevRawDerG = -1, prevRawDerB = -1;
@@ -423,23 +423,24 @@ interval:
           prevRawDerR = derR; prevRawDerG = derG; prevRawDerB = derB;
 
           int maxOverall = std::max({maxR, maxG, maxB});
-          // Una lámpara estática real es uniforme en color Y matemáticamente idéntica en el tiempo (tempDelta == 0)
-          bool isPureStaticLamp = (totalSpread <= 30 && tempDelta == 0 && maxOverall >= 30);
+          // Una lámpara estática real o pantalla fija es uniforme en color perimetral (totalSpread <= 55)
+          // y su variación temporal se limita al ruido natural de cámara (tempDelta <= 35)
+          bool isPureStaticLamp = (totalSpread <= 55 && tempDelta <= 35 && maxOverall >= 20);
 
           std::string targetCandidate = currentMode;
 
           if (currentMode == "Vídeo") {
             // Estando en Vídeo (TV/cine):
-            // Solo propone Estático si es una lámpara fija matemáticamente idéntica (sin ruido analógico de cámara)
+            // Solo propone Estático si es una escena fija o lámpara uniforme sostenida
             if (isPureStaticLamp) {
               targetCandidate = "Estático";
             } else {
               targetCandidate = "Vídeo";
             }
           } else if (currentMode == "Estático") {
-            // Estando en Estático (lámpara fija):
-            // Cualquier variación de imagen o color heterogéneo vuelve de inmediato a Vídeo
-            if (totalSpread > 35 || tempDelta >= 6) {
+            // Estando en Estático (lámpara fija o pantalla estática):
+            // Solo vuelve a Vídeo si hay variación heterogénea real (totalSpread > 80) o cambio brusco (tempDelta >= 65)
+            if (totalSpread > 80 || tempDelta >= 65) {
               targetCandidate = "Vídeo";
             } else {
               targetCandidate = "Estático";
@@ -463,12 +464,12 @@ interval:
           }
 
           // Histéresis de confirmación:
-          // 1. Desde Vídeo hacia Estático: exige 6 segundos continuos de lámpara fija matemática (tempDelta == 0)
+          // 1. Desde Vídeo hacia Estático: 1.5 segundos continuos de lámpara fija confirmada
           // 2. Desde Estático hacia Vídeo: 400ms ante cualquier señal dinámica
           // 3. Desde Standby hacia activo: 500ms con señal de luz confirmada
           uint32_t requiredHoldMs = 200;
           if (currentMode == "Vídeo") {
-            if (candidateMode == "Estático") requiredHoldMs = 6000;
+            if (candidateMode == "Estático") requiredHoldMs = 1500;
           } else if (currentMode == "Estático") {
             if (candidateMode == "Vídeo") requiredHoldMs = 400;
           } else if (currentMode == "Standby") {
@@ -485,7 +486,7 @@ interval:
 
           static uint32_t lastDiagPrint = 0;
           if (now - lastDiagPrint >= 2000) {
-            ESP_LOGI("mode", "Govee Hardware: %s (spread=%d, isUnif=%d, cand=%s)", currentMode.c_str(), totalSpread, isUniform, candidateMode.c_str());
+            ESP_LOGI("mode", "Govee Hardware: %s (spread=%d, dt=%d, cand=%s)", currentMode.c_str(), totalSpread, tempDelta, candidateMode.c_str());
             lastDiagPrint = now;
           }
 
