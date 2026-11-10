@@ -288,6 +288,9 @@ interval:
           static std::string currentMode = "Standby";
           static std::string candidateMode = "Standby";
           static uint32_t candidateStartTime = 0;
+          static bool lastKnownStateWasBlack = true;
+          static int consecutiveVideoFrames = 0;
+          static int consecutiveStaticFrames = 0;
 
           uint32_t now = millis();
           uint32_t tLoopStart = now;
@@ -304,13 +307,21 @@ interval:
             }
             prevFrameTime = now;
           } else {
-            // Si la línea está en silencio absoluto durante más de 5 segundos -> Standby
-            if (currentSignalActive && (now - lastValidFrameTime > 5000)) {
-              currentMode = "Standby";
-              candidateMode = "Standby";
-              currentSignalActive = false;
-              id(govee_signal_active).publish_state(false);
-              id(govee_hardware_state).publish_state("Standby");
+            // Si la línea está en silencio:
+            // Solo pasa a Standby si la pantalla/tira estaba en negro o si ya estaba en Standby.
+            // Si la lámpara estaba encendida con color (retenido por WS2811), se mantiene en Estático!
+            if (now - lastValidFrameTime > 8000) {
+              if (lastKnownStateWasBlack || currentMode == "Standby") {
+                if (currentMode != "Standby") {
+                  currentMode = "Standby";
+                  candidateMode = "Standby";
+                  currentSignalActive = false;
+                  consecutiveVideoFrames = 0;
+                  consecutiveStaticFrames = 0;
+                  id(govee_signal_active).publish_state(false);
+                  id(govee_hardware_state).publish_state("Standby");
+                }
+              }
             }
 
             if (millis() - tDiag >= 2000) {
@@ -399,6 +410,7 @@ interval:
                           derR <= 4 && derG <= 4 && derB <= 4 &&
                           supR <= 4 && supG <= 4 && supB <= 4 &&
                           cenR <= 4 && cenG <= 4 && cenB <= 4);
+          lastKnownStateWasBlack = isBlack;
 
           int maxR = std::max({izqR, supR, derR, cenR});
           int minR = std::min({izqR, supR, derR, cenR});
@@ -408,8 +420,6 @@ interval:
           int minB = std::min({izqB, supB, derB, cenB});
 
           int totalSpread = (maxR - minR) + (maxG - minG) + (maxB - minB);
-
-          // En color estático de lámpara (como rojo fijo o blanco cálido), totalSpread <= 55 por caída de tensión en 3.8m
           bool isUniform = (totalSpread <= 55);
 
           static int prevRawIzqR = -1, prevRawIzqG = -1, prevRawIzqB = -1;
@@ -423,70 +433,64 @@ interval:
           prevRawDerR = derR; prevRawDerG = derG; prevRawDerB = derB;
 
           int maxOverall = std::max({maxR, maxG, maxB});
-          // Una lámpara estática real o pantalla fija es uniforme en color perimetral (totalSpread <= 55)
-          // y su variación temporal se limita al ruido natural de cámara (tempDelta <= 35)
           bool isPureStaticLamp = (totalSpread <= 55 && tempDelta <= 35 && maxOverall >= 20);
+          bool isDynamic = (totalSpread > 80 || tempDelta >= 60);
+
+          // Contador de fotogramas reales consecutivos (inmune a pausas del bus y glitches aislados):
+          if (isDynamic) {
+            consecutiveVideoFrames++;
+            consecutiveStaticFrames = 0;
+          } else if (isPureStaticLamp) {
+            consecutiveStaticFrames++;
+            consecutiveVideoFrames = 0;
+          } else {
+            if (consecutiveVideoFrames > 0) consecutiveVideoFrames--;
+            if (consecutiveStaticFrames > 0) consecutiveStaticFrames--;
+          }
 
           std::string targetCandidate = currentMode;
 
           if (currentMode == "Vídeo") {
-            // Estando en Vídeo (TV/cine):
-            // Solo propone Estático si es una escena fija o lámpara uniforme sostenida
-            if (isPureStaticLamp) {
+            // Estando en Vídeo: Solo pasa a Estático tras al menos 35 fotogramas estáticos seguidos (~1.2s a 30 FPS).
+            // Si la escena es negra (fundido a negro de cine), isPureStaticLamp es falso y se mantiene en Vídeo.
+            if (consecutiveStaticFrames >= 35) {
               targetCandidate = "Estático";
             } else {
               targetCandidate = "Vídeo";
             }
           } else if (currentMode == "Estático") {
-            // Estando en Estático (lámpara fija o pantalla estática):
-            // Solo vuelve a Vídeo si hay variación heterogénea real (totalSpread > 80) o cambio brusco (tempDelta >= 65)
-            if (totalSpread > 80 || tempDelta >= 65) {
+            // Estando en Estático: Solo pasa a Vídeo si hay al menos 12 fotogramas dinámicos REALES consecutivos (~400ms a 30 FPS).
+            // Tramas sueltas, keepalives o glitches del sniffer NUNCA alcanzan 12 fotogramas seguidos -> CERO falsos vídeos.
+            if (consecutiveVideoFrames >= 12) {
               targetCandidate = "Vídeo";
             } else {
               targetCandidate = "Estático";
             }
           } else {
-            // Estando en Standby (arranque desde apagado):
-            // Blindaje: Solo puede despertar si hay luz/color activo real (!isBlack && maxOverall >= 15).
-            // Si la tira/pantalla está apagada o en negro, PERMANECE en Standby (evita encendidos nocturnos).
-            if (isPureStaticLamp) {
+            // Estando en Standby:
+            if (isBlack) {
+              targetCandidate = "Standby";
+            } else if (isPureStaticLamp && consecutiveStaticFrames >= 2) {
               targetCandidate = "Estático";
-            } else if (!isBlack && maxOverall >= 15) {
+            } else if (consecutiveVideoFrames >= 12) {
               targetCandidate = "Vídeo";
             } else {
               targetCandidate = "Standby";
             }
           }
 
-          if (targetCandidate != candidateMode) {
-            candidateMode = targetCandidate;
-            candidateStartTime = now;
-          }
-
-          // Histéresis de confirmación:
-          // 1. Desde Vídeo hacia Estático: 1.5 segundos continuos de lámpara fija confirmada
-          // 2. Desde Estático hacia Vídeo: 400ms ante cualquier señal dinámica
-          // 3. Desde Standby hacia activo: 500ms con señal de luz confirmada
-          uint32_t requiredHoldMs = 200;
-          if (currentMode == "Vídeo") {
-            if (candidateMode == "Estático") requiredHoldMs = 1500;
-          } else if (currentMode == "Estático") {
-            if (candidateMode == "Vídeo") requiredHoldMs = 400;
-          } else if (currentMode == "Standby") {
-            if (candidateMode == "Vídeo") requiredHoldMs = 500;
-            else if (candidateMode == "Estático") requiredHoldMs = 500;
-          }
-
-          if (candidateMode != currentMode && (now - candidateStartTime >= requiredHoldMs)) {
-            currentMode = candidateMode;
+          if (targetCandidate != currentMode) {
+            currentMode = targetCandidate;
             currentSignalActive = (currentMode != "Standby");
+            consecutiveVideoFrames = 0;
+            consecutiveStaticFrames = 0;
             id(govee_hardware_state).publish_state(currentMode);
             id(govee_signal_active).publish_state(currentSignalActive);
           }
 
           static uint32_t lastDiagPrint = 0;
           if (now - lastDiagPrint >= 2000) {
-            ESP_LOGI("mode", "Govee Hardware: %s (spread=%d, dt=%d, cand=%s)", currentMode.c_str(), totalSpread, tempDelta, candidateMode.c_str());
+            ESP_LOGI("mode", "Govee Hardware: %s (spread=%d, dt=%d, vF=%d, sF=%d)", currentMode.c_str(), totalSpread, tempDelta, consecutiveVideoFrames, consecutiveStaticFrames);
             lastDiagPrint = now;
           }
 
