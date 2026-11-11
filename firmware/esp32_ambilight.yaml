@@ -403,6 +403,50 @@ interval:
           int cenG = sG_cen / nInf;
           int cenB = sB_cen / nInf;
 
+          // Filtro Anti-Glitch Perimetral (inmune a ruidos aislados del bus de datos):
+          // Descarta saltos bruscos aislados (>25) si no se confirman en al menos 2 tramas consecutivas.
+          static int cIzqR = -1, cIzqG = -1, cIzqB = -1;
+          static int cSupR = -1, cSupG = -1, cSupB = -1;
+          static int cDerR = -1, cDerG = -1, cDerB = -1;
+          static int cCenR = -1, cCenG = -1, cCenB = -1;
+
+          static int lastCleanIzqR = -1, lastCleanIzqG = -1, lastCleanIzqB = -1;
+          static int lastCleanSupR = -1, lastCleanSupG = -1, lastCleanSupB = -1;
+          static int lastCleanDerR = -1, lastCleanDerG = -1, lastCleanDerB = -1;
+          static int lastCleanCenR = -1, lastCleanCenG = -1, lastCleanCenB = -1;
+
+          if (lastCleanIzqR >= 0) {
+            auto filterZone = [](int &rawR, int &rawG, int &rawB,
+                                 int &cleanR, int &cleanG, int &cleanB,
+                                 int &candR, int &candG, int &candB) {
+              bool isSpike = (abs(rawR - cleanR) > 25 || abs(rawG - cleanG) > 25 || abs(rawB - cleanB) > 25);
+              if (isSpike) {
+                bool matchesCand = (abs(rawR - candR) <= 15 && abs(rawG - candG) <= 15 && abs(rawB - candB) <= 15);
+                if (matchesCand) {
+                  // Salto confirmado en 2 tramas seguidas -> cambio real de escena
+                  cleanR = rawR; cleanG = rawG; cleanB = rawB;
+                } else {
+                  // Glitch aislado de 1 trama -> ignorar y mantener valor limpio previo
+                  candR = rawR; candG = rawG; candB = rawB;
+                  rawR = cleanR; rawG = cleanG; rawB = cleanB;
+                  return;
+                }
+              }
+              candR = rawR; candG = rawG; candB = rawB;
+              cleanR = rawR; cleanG = rawG; cleanB = rawB;
+            };
+
+            filterZone(izqR, izqG, izqB, lastCleanIzqR, lastCleanIzqG, lastCleanIzqB, cIzqR, cIzqG, cIzqB);
+            filterZone(derR, derG, derB, lastCleanDerR, lastCleanDerG, lastCleanDerB, cDerR, cDerG, cDerB);
+            filterZone(supR, supG, supB, lastCleanSupR, lastCleanSupG, lastCleanSupB, cSupR, cSupG, cSupB);
+            filterZone(cenR, cenG, cenB, lastCleanCenR, lastCleanCenG, lastCleanCenB, cCenR, cCenG, cCenB);
+          } else {
+            lastCleanIzqR = izqR; lastCleanIzqG = izqG; lastCleanIzqB = izqB;
+            lastCleanDerR = derR; lastCleanDerG = derG; lastCleanDerB = derB;
+            lastCleanSupR = supR; lastCleanSupG = supG; lastCleanSupB = supB;
+            lastCleanCenR = cenR; lastCleanCenG = cenG; lastCleanCenB = cenB;
+          }
+
           // Detección del estado real del hardware (Vídeo vs Estático vs Standby)
           bool isBlack = (izqR <= 4 && izqG <= 4 && izqB <= 4 &&
                           derR <= 4 && derG <= 4 && derB <= 4 &&
@@ -418,7 +462,7 @@ interval:
           int minB = std::min({izqB, supB, derB, cenB});
 
           int totalSpread = (maxR - minR) + (maxG - minG) + (maxB - minB);
-          bool isUniform = (totalSpread <= 55);
+          bool isUniform = (totalSpread <= 65);
 
           static int prevRawIzqR = -1, prevRawIzqG = -1, prevRawIzqB = -1;
           static int prevRawDerR = -1, prevRawDerG = -1, prevRawDerB = -1;
@@ -431,16 +475,18 @@ interval:
           prevRawDerR = derR; prevRawDerG = derG; prevRawDerB = derB;
 
           int maxOverall = std::max({maxR, maxG, maxB});
-          bool isPureStaticLamp = (totalSpread <= 55 && tempDelta <= 35 && maxOverall >= 20);
-          bool isDynamic = (totalSpread > 80 || tempDelta >= 60);
+          bool isPureStaticLamp = (totalSpread <= 65 && tempDelta <= 35 && maxOverall >= 20);
+          bool isDynamic = (totalSpread > 95 || tempDelta >= 70);
 
-          // Contador de fotogramas reales consecutivos (inmune a pausas del bus y glitches aislados):
+          // Contador de fotogramas reales consecutivos con decremento suave (inmune a micro-glitches):
           if (isDynamic) {
             consecutiveVideoFrames++;
-            consecutiveStaticFrames = 0;
+            if (consecutiveStaticFrames > 1) consecutiveStaticFrames -= 2;
+            else consecutiveStaticFrames = 0;
           } else if (isPureStaticLamp) {
             consecutiveStaticFrames++;
-            consecutiveVideoFrames = 0;
+            if (consecutiveVideoFrames > 1) consecutiveVideoFrames -= 2;
+            else consecutiveVideoFrames = 0;
           } else {
             if (consecutiveVideoFrames > 0) consecutiveVideoFrames--;
             if (consecutiveStaticFrames > 0) consecutiveStaticFrames--;
@@ -449,17 +495,17 @@ interval:
           std::string targetCandidate = currentMode;
 
           if (currentMode == "Vídeo") {
-            // Estando en Vídeo: Solo pasa a Estático tras al menos 35 fotogramas estáticos seguidos (~1.2s a 30 FPS).
+            // Estando en Vídeo: Solo pasa a Estático tras al menos 40 fotogramas estáticos confirmados (~1.6s a 25 FPS).
             // Si la escena es negra (fundido a negro de cine), isPureStaticLamp es falso y se mantiene en Vídeo.
-            if (consecutiveStaticFrames >= 35) {
+            if (consecutiveStaticFrames >= 40) {
               targetCandidate = "Estático";
             } else {
               targetCandidate = "Vídeo";
             }
           } else if (currentMode == "Estático") {
-            // Estando en Estático: Solo pasa a Vídeo si hay al menos 12 fotogramas dinámicos REALES consecutivos (~400ms a 30 FPS).
-            // Tramas sueltas, keepalives o glitches del sniffer NUNCA alcanzan 12 fotogramas seguidos -> CERO falsos vídeos.
-            if (consecutiveVideoFrames >= 12) {
+            // Estando en Estático: Exige al menos 65 fotogramas dinámicos REALES (~2.6s continuos).
+            // Los glitches, ruidos térmicos o tramas sueltas NUNCA alcanzan 2.6s continuos -> CERO falsos vídeos.
+            if (consecutiveVideoFrames >= 65) {
               targetCandidate = "Vídeo";
             } else {
               targetCandidate = "Estático";
@@ -470,7 +516,7 @@ interval:
               targetCandidate = "Standby";
             } else if (isPureStaticLamp && consecutiveStaticFrames >= 2) {
               targetCandidate = "Estático";
-            } else if (consecutiveVideoFrames >= 12) {
+            } else if (consecutiveVideoFrames >= 20) {
               targetCandidate = "Vídeo";
             } else {
               targetCandidate = "Standby";
@@ -478,6 +524,9 @@ interval:
           }
 
           if (targetCandidate != currentMode) {
+            ESP_LOGW("mode", "CAMBIO DE ESTADO: %s -> %s (spread=%d, dt=%d, vF=%d, sF=%d)",
+                     currentMode.c_str(), targetCandidate.c_str(), totalSpread, tempDelta,
+                     consecutiveVideoFrames, consecutiveStaticFrames);
             currentMode = targetCandidate;
             currentSignalActive = (currentMode != "Standby");
             consecutiveVideoFrames = 0;
@@ -502,46 +551,6 @@ interval:
               tDiag = millis();
             }
             return;
-          }
-
-          // Filtro Anti-Glitch: Rechazar saltos bruscos aislados (>25) que no se confirmen en 2 tramas consecutivas
-          static int cIzqR = -1, cIzqG = -1, cIzqB = -1;
-          static int cSupR = -1, cSupG = -1, cSupB = -1;
-          static int cDerR = -1, cDerG = -1, cDerB = -1;
-          static int cCenR = -1, cCenG = -1, cCenB = -1;
-
-          if (fIzqR >= 0) {
-            if ((abs(izqR - fIzqR) > 25 || abs(izqG - fIzqG) > 25 || abs(izqB - fIzqB) > 25) &&
-                (abs(izqR - cIzqR) > 15 || abs(izqG - cIzqG) > 15 || abs(izqB - cIzqB) > 15)) {
-              cIzqR = izqR; cIzqG = izqG; cIzqB = izqB;
-              izqR = fIzqR; izqG = fIzqG; izqB = fIzqB;
-            } else {
-              cIzqR = izqR; cIzqG = izqG; cIzqB = izqB;
-            }
-
-            if ((abs(derR - fDerR) > 25 || abs(derG - fDerG) > 25 || abs(derB - fDerB) > 25) &&
-                (abs(derR - cDerR) > 15 || abs(derG - cDerG) > 15 || abs(derB - cDerB) > 15)) {
-              cDerR = derR; cDerG = derG; cDerB = derB;
-              derR = fDerR; derG = fDerG; derB = fDerB;
-            } else {
-              cDerR = derR; cDerG = derG; cDerB = derB;
-            }
-
-            if ((abs(cenR - fCenR) > 25 || abs(cenG - fCenG) > 25 || abs(cenB - fCenB) > 25) &&
-                (abs(cenR - cCenR) > 15 || abs(cenG - cCenG) > 15 || abs(cenB - cCenB) > 15)) {
-              cCenR = cenR; cCenG = cenG; cCenB = cenB;
-              cenR = fCenR; cenG = fCenG; cenB = fCenB;
-            } else {
-              cCenR = cenR; cCenG = cenG; cCenB = cenB;
-            }
-
-            if ((abs(supR - fSupR) > 25 || abs(supG - fSupG) > 25 || abs(supB - fSupB) > 25) &&
-                (abs(supR - cSupR) > 15 || abs(supG - cSupG) > 15 || abs(supB - cSupB) > 15)) {
-              cSupR = supR; cSupG = supG; cSupB = supB;
-              supR = fSupR; supG = fSupG; supB = fSupB;
-            } else {
-              cSupR = supR; cSupG = supG; cSupB = supB;
-            }
           }
 
           // Suavizado temporal IIR (75/25): elimina el parpadeo de +-10 del sensor de cámara en estático
