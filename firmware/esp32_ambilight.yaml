@@ -415,8 +415,15 @@ interval:
                           (abs(izqR - prevRawIzqR) + abs(izqG - prevRawIzqG) + abs(izqB - prevRawIzqB) +
                            abs(derR - prevRawDerR) + abs(derG - prevRawDerG) + abs(derB - prevRawDerB));
 
-          prevRawIzqR = izqR; prevRawIzqG = izqG; prevRawIzqB = izqB;
-          prevRawDerR = derR; prevRawDerG = derG; prevRawDerB = derB;
+          // Detección y neutralización de micro-glitches de bus:
+          // Un salto anómalo (delta > 120) que no venga acompañado de una dispersión cromática real (spread >= 40)
+          // es un bit corrupto de un único fotograma (40ms). Lo descartamos para no falsear el estado ni el delta posterior.
+          bool isGlitch = (prevRawIzqR >= 0 && tempDelta > 120 && totalSpread < 40);
+
+          if (!isGlitch) {
+            prevRawIzqR = izqR; prevRawIzqG = izqG; prevRawIzqB = izqB;
+            prevRawDerR = derR; prevRawDerG = derG; prevRawDerB = derB;
+          }
 
           // Integrador Leaky-Bucket Asimétrico (inmune a micro-glitches de bus):
           static int consecutiveBlackFrames = 0;
@@ -427,18 +434,19 @@ interval:
             else consecutiveVideoFrames = 0;
             if (consecutiveStaticFrames > 1) consecutiveStaticFrames -= 2;
             else consecutiveStaticFrames = 0;
+          } else if (isGlitch) {
+            // Glitch aislado ignorado: no suma a vídeo ni penaliza estático
           } else {
             consecutiveBlackFrames = 0;
-            // Modo Lámpara (Estático puro): la centralita Govee genera un color uniforme en todos los LEDs (spread <= 35 y delta <= 35).
-            // Modo Vídeo: la cámara apunta a la TV; la dispersión entre bordes es claramente superior (spread > 35 o delta > 35).
-            bool isPureStatic = (totalSpread <= 35 && tempDelta <= 35);
-            if (!isPureStatic) {
-              // Fotograma de Vídeo (cámara activa / contenido dinámico)
+            // Modo Vídeo Real (Ambilight): presencia indiscutible de dispersión cromática entre bordes de pantalla
+            // o combinación de dispersión moderada con movimiento fluido continuo.
+            bool isRealVideo = (totalSpread >= 50 || (totalSpread >= 25 && tempDelta >= 20));
+            if (isRealVideo) {
               consecutiveVideoFrames++;
               if (consecutiveStaticFrames > 2) consecutiveStaticFrames -= 3;
               else consecutiveStaticFrames = 0;
             } else {
-              // Fotograma de Lámpara Estática (color uniforme)
+              // Modo Lámpara (color homogéneo en todo el perímetro, spread < 25)
               consecutiveStaticFrames++;
               if (consecutiveVideoFrames > 2) consecutiveVideoFrames -= 3;
               else consecutiveVideoFrames = 0;
@@ -450,7 +458,7 @@ interval:
           if (currentMode == "Standby") {
             // Salida de Standby al encender:
             if (!isBlack) {
-              if (consecutiveVideoFrames >= 6) {
+              if (consecutiveVideoFrames >= 8) {
                 targetCandidate = "Vídeo";
               } else if (consecutiveStaticFrames >= 8) {
                 targetCandidate = "Estático";
@@ -460,9 +468,9 @@ interval:
             // Estando en Estático:
             if (consecutiveBlackFrames >= 20) {
               targetCandidate = "Standby";
-            } else if (consecutiveVideoFrames >= 18) {
-              // Exige ~720ms continuos de vídeo dinámico real (spread > 35).
-              // Como los micro-glitches de bus duran 1 trama y se purgan a -3, jamás superan vF=2.
+            } else if (consecutiveVideoFrames >= 30) {
+              // Exige ~1.2s de vídeo real sostenido (spread >= 50 o movimiento con spread).
+              // En modo lámpara fija, vF es SIEMPRE 0 (CERO falsos cambios a vídeo).
               targetCandidate = "Vídeo";
             }
           } else if (currentMode == "Vídeo") {
@@ -470,8 +478,8 @@ interval:
             if (consecutiveBlackFrames >= 25) {
               // 1.0s de negro absoluto sostenido -> Standby
               targetCandidate = "Standby";
-            } else if (consecutiveStaticFrames >= 25) {
-              // Exige 1.0 segundo continuo de color uniforme de lámpara (spread <= 35) para pasar a Estático.
+            } else if (consecutiveStaticFrames >= 35) {
+              // Exige ~1.4s continuo de color uniforme de lámpara (spread < 25) para salir de Vídeo.
               targetCandidate = "Estático";
             }
           }
