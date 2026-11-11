@@ -301,10 +301,10 @@ interval:
             }
             prevFrameTime = now;
           } else {
-            // Si la línea está en silencio más de 2.5s -> Standby automático:
-            if (now - lastValidFrameTime > 2500) {
+            // Si la línea está en silencio más de 5s -> Standby automático:
+            if (now - lastValidFrameTime > 5000) {
               if (currentMode != "Standby") {
-                ESP_LOGW("mode", "CAMBIO DE ESTADO: %s -> Standby (sin señal > 2.5s)", currentMode.c_str());
+                ESP_LOGW("mode", "CAMBIO DE ESTADO: %s -> Standby (sin señal > 5s)", currentMode.c_str());
                 currentMode = "Standby";
                 currentSignalActive = false;
                 consecutiveVideoFrames = 0;
@@ -429,16 +429,17 @@ interval:
             else consecutiveStaticFrames = 0;
           } else {
             consecutiveBlackFrames = 0;
-            // Frame dinámico (vídeo): dispersión espacial entre bordes O movimiento temporal continuo
-            bool isDynamic = (totalSpread >= 75 || tempDelta >= 45);
-            if (isDynamic) {
+            // Modo Lámpara (Estático puro): la centralita Govee genera un color uniforme digital idéntico en todos los LEDs (spread <= 18 y delta <= 10).
+            // Modo Vídeo: la cámara apunta a la TV; por ruido óptico del sensor o contenido en pantalla, siempre hay variación (spread > 18 o delta > 10).
+            bool isPureStatic = (totalSpread <= 18 && tempDelta <= 10);
+            if (!isPureStatic) {
+              // Fotograma de Vídeo (cámara activa / contenido dinámico)
               consecutiveVideoFrames++;
-              // Ante movimiento real, drena rápidamente el contador de estático
               if (consecutiveStaticFrames > 2) consecutiveStaticFrames -= 3;
               else consecutiveStaticFrames = 0;
             } else {
+              // Fotograma de Lámpara Estática (color digital fijo)
               consecutiveStaticFrames++;
-              // Ante tramas limpias de lámpara, cualquier pico de glitch aislado se purga de inmediato
               if (consecutiveVideoFrames > 2) consecutiveVideoFrames -= 3;
               else consecutiveVideoFrames = 0;
             }
@@ -447,30 +448,31 @@ interval:
           std::string targetCandidate = currentMode;
 
           if (currentMode == "Standby") {
-            // Salida inmediata de Standby al encender:
+            // Salida de Standby al encender:
             if (!isBlack) {
-              if (consecutiveVideoFrames >= 8) {
+              if (consecutiveVideoFrames >= 6) {
                 targetCandidate = "Vídeo";
-              } else if (consecutiveStaticFrames >= 4) {
+              } else if (consecutiveStaticFrames >= 12) {
                 targetCandidate = "Estático";
               }
             }
           } else if (currentMode == "Estático") {
             // Estando en Estático:
-            if (consecutiveBlackFrames >= 15) {
+            if (consecutiveBlackFrames >= 20) {
               targetCandidate = "Standby";
-            } else if (consecutiveVideoFrames >= 28) {
-              // Exige ~1.12s continuo de vídeo real.
-              // Con purga asimétrica (-3), los picos aislados de glitch (vF<=2) jamás alcanzan 28.
+            } else if (consecutiveVideoFrames >= 20) {
+              // Exige ~800ms continuos de vídeo real.
+              // Como los micro-glitches de bus duran 1 trama y se purgan a -3, jamás superan vF=2.
               targetCandidate = "Vídeo";
             }
           } else if (currentMode == "Vídeo") {
             // Estando en Vídeo:
-            if (consecutiveBlackFrames >= 25) {
-              // 1.0s de negro absoluto sostenido -> Standby
+            if (consecutiveBlackFrames >= 30) {
+              // 1.2s de negro absoluto sostenido -> Standby
               targetCandidate = "Standby";
-            } else if (consecutiveStaticFrames >= 40) {
-              // Exige 1.6s continuo de color estático uniforme para salir de Vídeo (evita cambios en pausas de cine)
+            } else if (consecutiveStaticFrames >= 75) {
+              // Exige 3.0 segundos ininterrumpidos de lámpara fija digital para abandonar el modo Vídeo.
+              // En vídeo, el ruido óptico del sensor de cámara y el contenido impiden alcanzar 75 tramas seguidas.
               targetCandidate = "Estático";
             }
           }

@@ -15,21 +15,15 @@ static portMUX_TYPE goveeMutex = portMUX_INITIALIZER_UNLOCKED;
 IRAM_ATTR inline int capture_govee_frame(uint8_t *ledData, int maxLeds) {
     uint32_t tStart = esp_cpu_get_cycle_count();
 
-    // 1. Asegurar que la linea este activa
-    while (!(*GOVEE_GPIO_IN & GOVEE_PIN_MASK)) {
-        if (esp_cpu_get_cycle_count() - tStart > 3200000) return 0; // 20ms
-    }
-
-    // 2. Esperar al silencio de reset: la linea debe mantenerse en BAJO continuo
-    // durante al menos 40.000 ciclos (250 us). Si hay cualquier pulso, se reinicia la cuenta.
+    // 1. Detectar el silencio de reset WS2811 (linea en BAJO continuo durante > 60us = 9600 ciclos)
     bool resetDetected = false;
-    while (esp_cpu_get_cycle_count() - tStart < 8000000) { // 50ms max
+    while (esp_cpu_get_cycle_count() - tStart < 6400000) { // 40ms max
         while (*GOVEE_GPIO_IN & GOVEE_PIN_MASK) {
-            if (esp_cpu_get_cycle_count() - tStart > 8000000) return 0;
+            if (esp_cpu_get_cycle_count() - tStart > 6400000) return 0;
         }
         uint32_t tLow = esp_cpu_get_cycle_count();
         while (!(*GOVEE_GPIO_IN & GOVEE_PIN_MASK)) {
-            if (esp_cpu_get_cycle_count() - tLow > 40000) { // 250us en bajo
+            if (esp_cpu_get_cycle_count() - tLow > 9600) { // >60us en bajo continuo = Reset confirmado
                 resetDetected = true;
                 break;
             }
@@ -39,15 +33,15 @@ IRAM_ATTR inline int capture_govee_frame(uint8_t *ledData, int maxLeds) {
 
     if (!resetDetected) return 0;
 
-    // 3. Entrar en seccion critica: desactiva interrupciones durante la transmision de ~1.1ms
+    // 2. Entrar en seccion critica: desactiva interrupciones durante la transmision de ~1.1ms
     taskENTER_CRITICAL(&goveeMutex);
 
-    // 4. Esperar al flanco de subida del primer bit con filtro antirruido
+    // 3. Esperar al flanco de subida del primer bit con filtro antirruido
     uint32_t tRise = 0;
     uint32_t tWaitFirst = esp_cpu_get_cycle_count();
     while (1) {
         while (!(*GOVEE_GPIO_IN & GOVEE_PIN_MASK)) {
-            if (esp_cpu_get_cycle_count() - tWaitFirst > 320000) { // 2ms timeout
+            if (esp_cpu_get_cycle_count() - tWaitFirst > 1600000) { // 10ms timeout
                 taskEXIT_CRITICAL(&goveeMutex);
                 return 0;
             }
