@@ -281,12 +281,8 @@ interval:
           static uint32_t lastValidFrameTime = 0;
           static uint32_t prevFrameTime = 0;
           static uint32_t lastFrameInterval = 0;
-          static uint32_t videoStreamStreak = 0;
           static bool currentSignalActive = false;
           static std::string currentMode = "Standby";
-          static std::string candidateMode = "Standby";
-          static uint32_t candidateStartTime = 0;
-          static bool lastKnownStateWasBlack = true;
           static int consecutiveVideoFrames = 0;
           static int consecutiveStaticFrames = 0;
 
@@ -305,20 +301,16 @@ interval:
             }
             prevFrameTime = now;
           } else {
-            // Si la línea está en silencio:
-            // Solo pasa a Standby si la pantalla/tira estaba en negro o si ya estaba en Standby.
-            // Si la lámpara estaba encendida con color (retenido por WS2811), se mantiene en Estático!
-            if (now - lastValidFrameTime > 8000) {
-              if (lastKnownStateWasBlack || currentMode == "Standby") {
-                if (currentMode != "Standby") {
-                  currentMode = "Standby";
-                  candidateMode = "Standby";
-                  currentSignalActive = false;
-                  consecutiveVideoFrames = 0;
-                  consecutiveStaticFrames = 0;
-                  id(govee_signal_active).publish_state(false);
-                  id(govee_hardware_state).publish_state("Standby");
-                }
+            // Si la línea está en silencio más de 2.5s -> Standby automático:
+            if (now - lastValidFrameTime > 2500) {
+              if (currentMode != "Standby") {
+                ESP_LOGW("mode", "CAMBIO DE ESTADO: %s -> Standby (sin señal > 2.5s)", currentMode.c_str());
+                currentMode = "Standby";
+                currentSignalActive = false;
+                consecutiveVideoFrames = 0;
+                consecutiveStaticFrames = 0;
+                id(govee_signal_active).publish_state(false);
+                id(govee_hardware_state).publish_state("Standby");
               }
             }
 
@@ -403,56 +395,9 @@ interval:
           int cenG = sG_cen / nInf;
           int cenB = sB_cen / nInf;
 
-          // Filtro Anti-Glitch Perimetral (inmune a ruidos aislados del bus de datos):
-          // Descarta saltos bruscos aislados (>25) si no se confirman en al menos 2 tramas consecutivas.
-          static int cIzqR = -1, cIzqG = -1, cIzqB = -1;
-          static int cSupR = -1, cSupG = -1, cSupB = -1;
-          static int cDerR = -1, cDerG = -1, cDerB = -1;
-          static int cCenR = -1, cCenG = -1, cCenB = -1;
-
-          static int lastCleanIzqR = -1, lastCleanIzqG = -1, lastCleanIzqB = -1;
-          static int lastCleanSupR = -1, lastCleanSupG = -1, lastCleanSupB = -1;
-          static int lastCleanDerR = -1, lastCleanDerG = -1, lastCleanDerB = -1;
-          static int lastCleanCenR = -1, lastCleanCenG = -1, lastCleanCenB = -1;
-
-          if (lastCleanIzqR >= 0) {
-            auto filterZone = [](int &rawR, int &rawG, int &rawB,
-                                 int &cleanR, int &cleanG, int &cleanB,
-                                 int &candR, int &candG, int &candB) {
-              bool isSpike = (abs(rawR - cleanR) > 25 || abs(rawG - cleanG) > 25 || abs(rawB - cleanB) > 25);
-              if (isSpike) {
-                bool matchesCand = (abs(rawR - candR) <= 15 && abs(rawG - candG) <= 15 && abs(rawB - candB) <= 15);
-                if (matchesCand) {
-                  // Salto confirmado en 2 tramas seguidas -> cambio real de escena
-                  cleanR = rawR; cleanG = rawG; cleanB = rawB;
-                } else {
-                  // Glitch aislado de 1 trama -> ignorar y mantener valor limpio previo
-                  candR = rawR; candG = rawG; candB = rawB;
-                  rawR = cleanR; rawG = cleanG; rawB = cleanB;
-                  return;
-                }
-              }
-              candR = rawR; candG = rawG; candB = rawB;
-              cleanR = rawR; cleanG = rawG; cleanB = rawB;
-            };
-
-            filterZone(izqR, izqG, izqB, lastCleanIzqR, lastCleanIzqG, lastCleanIzqB, cIzqR, cIzqG, cIzqB);
-            filterZone(derR, derG, derB, lastCleanDerR, lastCleanDerG, lastCleanDerB, cDerR, cDerG, cDerB);
-            filterZone(supR, supG, supB, lastCleanSupR, lastCleanSupG, lastCleanSupB, cSupR, cSupG, cSupB);
-            filterZone(cenR, cenG, cenB, lastCleanCenR, lastCleanCenG, lastCleanCenB, cCenR, cCenG, cCenB);
-          } else {
-            lastCleanIzqR = izqR; lastCleanIzqG = izqG; lastCleanIzqB = izqB;
-            lastCleanDerR = derR; lastCleanDerG = derG; lastCleanDerB = derB;
-            lastCleanSupR = supR; lastCleanSupG = supG; lastCleanSupB = supB;
-            lastCleanCenR = cenR; lastCleanCenG = cenG; lastCleanCenB = cenB;
-          }
-
           // Detección del estado real del hardware (Vídeo vs Estático vs Standby)
-          bool isBlack = (izqR <= 4 && izqG <= 4 && izqB <= 4 &&
-                          derR <= 4 && derG <= 4 && derB <= 4 &&
-                          supR <= 4 && supG <= 4 && supB <= 4 &&
-                          cenR <= 4 && cenG <= 4 && cenB <= 4);
-          lastKnownStateWasBlack = isBlack;
+          int maxOverall = std::max({izqR, izqG, izqB, supR, supG, supB, derR, derG, derB, cenR, cenG, cenB});
+          bool isBlack = (maxOverall <= 4);
 
           int maxR = std::max({izqR, supR, derR, cenR});
           int minR = std::min({izqR, supR, derR, cenR});
@@ -462,7 +407,6 @@ interval:
           int minB = std::min({izqB, supB, derB, cenB});
 
           int totalSpread = (maxR - minR) + (maxG - minG) + (maxB - minB);
-          bool isUniform = (totalSpread <= 65);
 
           static int prevRawIzqR = -1, prevRawIzqG = -1, prevRawIzqB = -1;
           static int prevRawDerR = -1, prevRawDerG = -1, prevRawDerB = -1;
@@ -474,70 +418,76 @@ interval:
           prevRawIzqR = izqR; prevRawIzqG = izqG; prevRawIzqB = izqB;
           prevRawDerR = derR; prevRawDerG = derG; prevRawDerB = derB;
 
-          int maxOverall = std::max({maxR, maxG, maxB});
-          bool isPureStaticLamp = (totalSpread <= 65 && tempDelta <= 35 && maxOverall >= 20);
-          bool isDynamic = (totalSpread > 95 || tempDelta >= 70);
+          // Integrador Leaky-Bucket (inmune a glitches aislados de 1 trama):
+          static int consecutiveBlackFrames = 0;
 
-          // Contador de fotogramas reales consecutivos con decremento suave (inmune a micro-glitches):
-          if (isDynamic) {
-            consecutiveVideoFrames++;
-            if (consecutiveStaticFrames > 1) consecutiveStaticFrames -= 2;
-            else consecutiveStaticFrames = 0;
-          } else if (isPureStaticLamp) {
-            consecutiveStaticFrames++;
-            if (consecutiveVideoFrames > 1) consecutiveVideoFrames -= 2;
-            else consecutiveVideoFrames = 0;
-          } else {
+          if (isBlack) {
+            consecutiveBlackFrames++;
             if (consecutiveVideoFrames > 0) consecutiveVideoFrames--;
             if (consecutiveStaticFrames > 0) consecutiveStaticFrames--;
+          } else {
+            consecutiveBlackFrames = 0;
+            // Frame dinámico (vídeo): dispersión espacial entre bordes O movimiento temporal continuo
+            bool isDynamic = (totalSpread >= 70 || tempDelta >= 40);
+            if (isDynamic) {
+              consecutiveVideoFrames++;
+              if (consecutiveStaticFrames > 0) consecutiveStaticFrames--;
+            } else {
+              // Frame estático (lámpara): color continuo y uniforme
+              consecutiveStaticFrames++;
+              if (consecutiveVideoFrames > 0) consecutiveVideoFrames--;
+            }
           }
 
           std::string targetCandidate = currentMode;
 
-          if (currentMode == "Vídeo") {
-            // Estando en Vídeo: Solo pasa a Estático tras al menos 40 fotogramas estáticos confirmados (~1.6s a 25 FPS).
-            // Si la escena es negra (fundido a negro de cine), isPureStaticLamp es falso y se mantiene en Vídeo.
-            if (consecutiveStaticFrames >= 40) {
-              targetCandidate = "Estático";
-            } else {
-              targetCandidate = "Vídeo";
+          if (currentMode == "Standby") {
+            // Salida inmediata de Standby al encender (150-250ms):
+            if (!isBlack) {
+              if (consecutiveVideoFrames >= 6) {
+                targetCandidate = "Vídeo";
+              } else if (consecutiveStaticFrames >= 4) {
+                targetCandidate = "Estático";
+              }
             }
           } else if (currentMode == "Estático") {
-            // Estando en Estático: Exige al menos 65 fotogramas dinámicos REALES (~2.6s continuos).
-            // Los glitches, ruidos térmicos o tramas sueltas NUNCA alcanzan 2.6s continuos -> CERO falsos vídeos.
-            if (consecutiveVideoFrames >= 65) {
+            // Estando en Estático:
+            if (consecutiveBlackFrames >= 15) {
+              // Pantalla/tira apagada en negro durante ~600ms -> Standby
+              targetCandidate = "Standby";
+            } else if (consecutiveVideoFrames >= 16) {
+              // ~640ms de vídeo sostenido. Un micro-glitch aislado de 1 trama (40ms) es completamente ignorado.
               targetCandidate = "Vídeo";
-            } else {
-              targetCandidate = "Estático";
             }
-          } else {
-            // Estando en Standby:
-            if (isBlack) {
+          } else if (currentMode == "Vídeo") {
+            // Estando en Vídeo:
+            if (consecutiveBlackFrames >= 25) {
+              // 1.0s continuo de negro absoluto (apagar TV vs breve fade to black de cine)
               targetCandidate = "Standby";
-            } else if (isPureStaticLamp && consecutiveStaticFrames >= 2) {
+            } else if (consecutiveStaticFrames >= 25) {
+              // 1.0s continuo de lámpara fija o vídeo en pausa
               targetCandidate = "Estático";
-            } else if (consecutiveVideoFrames >= 20) {
-              targetCandidate = "Vídeo";
-            } else {
-              targetCandidate = "Standby";
             }
           }
 
           if (targetCandidate != currentMode) {
-            ESP_LOGW("mode", "CAMBIO DE ESTADO: %s -> %s (spread=%d, dt=%d, vF=%d, sF=%d)",
+            ESP_LOGW("mode", "CAMBIO DE ESTADO: %s -> %s (spread=%d, dt=%d, vF=%d, sF=%d, bF=%d)",
                      currentMode.c_str(), targetCandidate.c_str(), totalSpread, tempDelta,
-                     consecutiveVideoFrames, consecutiveStaticFrames);
+                     consecutiveVideoFrames, consecutiveStaticFrames, consecutiveBlackFrames);
             currentMode = targetCandidate;
             currentSignalActive = (currentMode != "Standby");
             consecutiveVideoFrames = 0;
             consecutiveStaticFrames = 0;
+            consecutiveBlackFrames = 0;
             id(govee_hardware_state).publish_state(currentMode);
             id(govee_signal_active).publish_state(currentSignalActive);
           }
 
           static uint32_t lastDiagPrint = 0;
           if (now - lastDiagPrint >= 2000) {
-            ESP_LOGI("mode", "Govee Hardware: %s (spread=%d, dt=%d, vF=%d, sF=%d)", currentMode.c_str(), totalSpread, tempDelta, consecutiveVideoFrames, consecutiveStaticFrames);
+            ESP_LOGI("mode", "Govee Hardware: %s (spread=%d, dt=%d, vF=%d, sF=%d, bF=%d)",
+                     currentMode.c_str(), totalSpread, tempDelta,
+                     consecutiveVideoFrames, consecutiveStaticFrames, consecutiveBlackFrames);
             lastDiagPrint = now;
           }
 
