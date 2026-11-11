@@ -429,16 +429,16 @@ interval:
             else consecutiveStaticFrames = 0;
           } else {
             consecutiveBlackFrames = 0;
-            // Modo Lámpara (Estático puro): la centralita Govee genera un color uniforme digital idéntico en todos los LEDs (spread <= 18 y delta <= 10).
-            // Modo Vídeo: la cámara apunta a la TV; por ruido óptico del sensor o contenido en pantalla, siempre hay variación (spread > 18 o delta > 10).
-            bool isPureStatic = (totalSpread <= 18 && tempDelta <= 10);
+            // Modo Lámpara (Estático puro): la centralita Govee genera un color uniforme en todos los LEDs (spread <= 35 y delta <= 35).
+            // Modo Vídeo: la cámara apunta a la TV; la dispersión entre bordes es claramente superior (spread > 35 o delta > 35).
+            bool isPureStatic = (totalSpread <= 35 && tempDelta <= 35);
             if (!isPureStatic) {
               // Fotograma de Vídeo (cámara activa / contenido dinámico)
               consecutiveVideoFrames++;
               if (consecutiveStaticFrames > 2) consecutiveStaticFrames -= 3;
               else consecutiveStaticFrames = 0;
             } else {
-              // Fotograma de Lámpara Estática (color digital fijo)
+              // Fotograma de Lámpara Estática (color uniforme)
               consecutiveStaticFrames++;
               if (consecutiveVideoFrames > 2) consecutiveVideoFrames -= 3;
               else consecutiveVideoFrames = 0;
@@ -452,7 +452,7 @@ interval:
             if (!isBlack) {
               if (consecutiveVideoFrames >= 6) {
                 targetCandidate = "Vídeo";
-              } else if (consecutiveStaticFrames >= 12) {
+              } else if (consecutiveStaticFrames >= 8) {
                 targetCandidate = "Estático";
               }
             }
@@ -460,19 +460,18 @@ interval:
             // Estando en Estático:
             if (consecutiveBlackFrames >= 20) {
               targetCandidate = "Standby";
-            } else if (consecutiveVideoFrames >= 20) {
-              // Exige ~800ms continuos de vídeo real.
+            } else if (consecutiveVideoFrames >= 18) {
+              // Exige ~720ms continuos de vídeo dinámico real (spread > 35).
               // Como los micro-glitches de bus duran 1 trama y se purgan a -3, jamás superan vF=2.
               targetCandidate = "Vídeo";
             }
           } else if (currentMode == "Vídeo") {
             // Estando en Vídeo:
-            if (consecutiveBlackFrames >= 30) {
-              // 1.2s de negro absoluto sostenido -> Standby
+            if (consecutiveBlackFrames >= 25) {
+              // 1.0s de negro absoluto sostenido -> Standby
               targetCandidate = "Standby";
-            } else if (consecutiveStaticFrames >= 75) {
-              // Exige 3.0 segundos ininterrumpidos de lámpara fija digital para abandonar el modo Vídeo.
-              // En vídeo, el ruido óptico del sensor de cámara y el contenido impiden alcanzar 75 tramas seguidas.
+            } else if (consecutiveStaticFrames >= 25) {
+              // Exige 1.0 segundo continuo de color uniforme de lámpara (spread <= 35) para pasar a Estático.
               targetCandidate = "Estático";
             }
           }
