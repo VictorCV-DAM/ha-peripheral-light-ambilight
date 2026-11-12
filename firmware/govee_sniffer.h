@@ -26,10 +26,10 @@ static void IRAM_ATTR govee_ws2811_isr(void *arg) {
         return; // Ruido espurio
     }
 
-    // Desactivar temporalmente la interrupción para evitar disparos repetidos durante los 888 bits
-    gpio_intr_disable(GPIO_NUM_3);
+    // Desactivar temporalmente la interrupción por registro (100% IRAM seguro)
+    GPIO.pin[3].int_ena = 0;
 
-    uint8_t temp[GOVEE_MAX_LEDS * 3];
+    static uint8_t temp[GOVEE_MAX_LEDS * 3];
     int ledsRead = 0;
     bool frameDone = false;
 
@@ -85,9 +85,9 @@ static void IRAM_ATTR govee_ws2811_isr(void *arg) {
         if (esp_cpu_get_cycle_count() - tMaxReset > 32000) break; // 200us max
     }
 
-    // Limpiar bandera de interrupción y re-activar para la siguiente trama (~32ms después)
+    // Limpiar bandera de interrupción y re-activar por registro para la siguiente trama (~32ms después)
     GPIO.status_w1tc.val = GOVEE_PIN_MASK;
-    gpio_intr_enable(GPIO_NUM_3);
+    GPIO.pin[3].int_ena = 1; // 1 = GPIO_INTR_POSEDGE
 
     if (ledsRead >= 37) {
         memcpy(s_capturedLeds, temp, 37 * 3);

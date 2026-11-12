@@ -227,8 +227,7 @@ number:
 
 script:
   - id: enviar_color_ha
-    mode: parallel
-    max_runs: 10
+    mode: restart
     parameters:
       entidad: string
       r: int
@@ -237,7 +236,7 @@ script:
       trans: float
     then:
       - lambda: |-
-          ESP_LOGI("ha_send", "EVENT -> %s: R=%d G=%d B=%d (trans=%.2fs)", entidad.c_str(), r, g, b, trans);
+          ESP_LOGD("ha_send", "EVENT -> %s: R=%d G=%d B=%d (trans=%.2fs)", entidad.c_str(), r, g, b, trans);
       - homeassistant.event:
           event: esphome.ambilight_color
           data:
@@ -553,10 +552,10 @@ interval:
           bool force = (now - lastForceSend > 15000);
 
           float trans = id(velocidad_transicion).state;
-          uint32_t minInterval = 60;
+          uint32_t minInterval = 100;
           if (trans > 0.01f) {
-            minInterval = (uint32_t)(trans * 750.0f);
-            if (minInterval < 60) minInterval = 60;
+            minInterval = (uint32_t)(trans * 1000.0f);
+            if (minInterval < 100) minInterval = 100;
           }
 
           bool sentAny = false;
