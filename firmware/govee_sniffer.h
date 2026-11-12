@@ -118,9 +118,13 @@ IRAM_ATTR inline int capture_govee_raw(uint8_t *ledData, int maxLeds, uint32_t m
 // Tarea en segundo plano FreeRTOS (Phase-Locked Loop)
 static void govee_sniffer_task(void *pvParameters) {
     uint8_t tempBuffer[SNIFFER_MAX_LEDS * 3];
+    bool inSync = false;
     while (true) {
-        // Timeout de captura: 15ms (2.400.000 ciclos a 160MHz)
-        int count = capture_govee_raw(tempBuffer, SNIFFER_MAX_LEDS, 2400000);
+        // Si ya estamos sincronizados, la trama vendrá en 10-18ms (esperamos max 25ms = 4.000.000 ciclos).
+        // Si no estamos sincronizados (arranque o pérdida), damos 50ms (8.000.000 ciclos) para engancharla.
+        uint32_t waitCycles = inSync ? 4000000 : 8000000;
+
+        int count = capture_govee_raw(tempBuffer, SNIFFER_MAX_LEDS, waitCycles);
         if (count >= SNIFFER_MAX_LEDS) {
             taskENTER_CRITICAL(&goveeMutex);
             memcpy(s_sharedLedData, tempBuffer, SNIFFER_MAX_LEDS * 3);
@@ -129,12 +133,15 @@ static void govee_sniffer_task(void *pvParameters) {
             taskEXIT_CRITICAL(&goveeMutex);
 
             s_lastFrameTimestamp = esp_log_timestamp();
+            inSync = true;
 
-            // Siguiente trama vendrá en ~33-40ms. Dormimos 22ms dejando 100% CPU a WiFi y ESPHome
-            vTaskDelay(pdMS_TO_TICKS(22));
+            // La trama acaba de terminar. La siguiente vendrá en ~32-35ms.
+            // Dormimos 18ms cediendo el 100% de CPU a WiFi y ESPHome antes de preparar la siguiente captura.
+            vTaskDelay(pdMS_TO_TICKS(18));
         } else {
-            // Sin señal o pausa entre tramas. Dormimos 25ms para no saturar CPU en Standby
-            vTaskDelay(pdMS_TO_TICKS(25));
+            inSync = false;
+            // Sin señal o fuera de fase. Dormimos 10ms antes del siguiente enganche
+            vTaskDelay(pdMS_TO_TICKS(10));
         }
     }
 }
@@ -146,7 +153,7 @@ inline void init_govee_sniffer() {
             "gov_sniffer",
             4096,
             NULL,
-            1, // Prioridad 1 (la misma que loop, inferior a WiFi 19-23)
+            1, // Prioridad 1
             &s_snifferTaskHandle,
             0  // Core 0 (ESP32-C3)
         );
@@ -167,7 +174,6 @@ inline int get_latest_govee_frame(uint8_t *dest, int maxLeds, bool *isNew) {
     return count;
 }
 
-// Mantener compatibilidad directa si se invoca legacy
 inline int capture_govee_frame(uint8_t *ledData, int maxLeds) {
     bool isNew = false;
     return get_latest_govee_frame(ledData, maxLeds, &isNew);
