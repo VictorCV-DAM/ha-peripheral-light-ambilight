@@ -12,14 +12,15 @@
 static portMUX_TYPE goveeMutex = portMUX_INITIALIZER_UNLOCKED;
 
 // Decodificador WS2811 de Ultra-Precision para Govee T1 (H6199) - 37 LEDs (912/888 bits)
+// Sección crítica atómica de SOLO 1.1ms estrictamente durante el tren de bits de los LEDs
 IRAM_ATTR inline int capture_govee_frame(uint8_t *ledData, int maxLeds) {
     uint32_t tStart = esp_cpu_get_cycle_count();
 
     // 1. Detectar el silencio de reset WS2811 (linea en BAJO continuo durante > 60us = 9600 ciclos)
     bool resetDetected = false;
-    while (esp_cpu_get_cycle_count() - tStart < 6400000) { // 40ms max
+    while (esp_cpu_get_cycle_count() - tStart < 1600000) { // 10ms max timeout
         while (*GOVEE_GPIO_IN & GOVEE_PIN_MASK) {
-            if (esp_cpu_get_cycle_count() - tStart > 6400000) return 0;
+            if (esp_cpu_get_cycle_count() - tStart > 1600000) return 0;
         }
         uint32_t tLow = esp_cpu_get_cycle_count();
         while (!(*GOVEE_GPIO_IN & GOVEE_PIN_MASK)) {
@@ -34,26 +35,27 @@ IRAM_ATTR inline int capture_govee_frame(uint8_t *ledData, int maxLeds) {
     if (!resetDetected) return 0;
 
     // 2. Esperar al flanco de subida del primer bit con interrupciones HABILITADAS (WiFi 100% libre)
-    // Durante los ~32ms de silencio, WiFi y el sistema funcionan sin starvation.
+    // Se filtra cualquier micro-pico espurio (< 125ns) sin abortar la captura del fotograma.
+    uint32_t tRise = 0;
     uint32_t tWaitFirst = esp_cpu_get_cycle_count();
-    while (!(*GOVEE_GPIO_IN & GOVEE_PIN_MASK)) {
-        if (esp_cpu_get_cycle_count() - tWaitFirst > 6400000) { // 40ms timeout
-            return 0;
+    while (1) {
+        while (!(*GOVEE_GPIO_IN & GOVEE_PIN_MASK)) {
+            if (esp_cpu_get_cycle_count() - tWaitFirst > 1600000) { // 10ms timeout
+                return 0;
+            }
         }
+        tRise = esp_cpu_get_cycle_count();
+        while (esp_cpu_get_cycle_count() - tRise < 20); // 125ns glitch filter
+        if (*GOVEE_GPIO_IN & GOVEE_PIN_MASK) {
+            // Pulso REAL confirmado (sigue en ALTO tras 125ns).
+            // Entramos en sección crítica inmediatamente para la lectura atómica de 1.1ms:
+            taskENTER_CRITICAL(&goveeMutex);
+            break;
+        }
+        // Falso pico de ruido transitorio en cable sin masa: continuar esperando el flanco real
     }
 
-    // 3. Entrar en seccion critica en el instante exacto del flanco de subida (~12.5ns tras la subida)
-    taskENTER_CRITICAL(&goveeMutex);
-    uint32_t tRise = esp_cpu_get_cycle_count();
-
-    // 4. Filtro antirruido para descartar micro-picos espurios en el bus sin masa (125ns = 20 ciclos)
-    while (esp_cpu_get_cycle_count() - tRise < 20);
-    if (!(*GOVEE_GPIO_IN & GOVEE_PIN_MASK)) {
-        taskEXIT_CRITICAL(&goveeMutex);
-        return 0; // Pico de ruido eléctrico transitorio descartado
-    }
-
-    // 5. Muestreo WS2811 por punto medio (530ns tras flanco)
+    // 3. Muestreo WS2811 por punto medio (530ns tras flanco) bajo sección crítica atómica (1.1ms)
     int ledsRead = 0;
     bool frameDone = false;
 
