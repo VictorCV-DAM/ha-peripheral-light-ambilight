@@ -15,9 +15,20 @@ static uint8_t s_capturedLeds[GOVEE_MAX_LEDS * 3] = {0};
 static volatile int s_capturedCount = 0;
 static volatile bool s_newFrameReady = false;
 static bool s_isrInstalled = false;
+static uint32_t s_lastFrameCycle = 0;
 
 static void IRAM_ATTR govee_ws2811_isr(void *arg) {
-    uint32_t tRise = esp_cpu_get_cycle_count();
+    uint32_t nowCycle = esp_cpu_get_cycle_count();
+
+    // Rate-limiter de hardware: Las tramas de Govee llegan a 30 FPS (~33ms).
+    // Si se recibe cualquier flanco antes de 10ms (1.6M ciclos a 160MHz), se descarta en 20ns.
+    // Esto blinda el micro frente a cualquier ruido estático o tormenta de rebotes del pin sin tierra.
+    if (nowCycle - s_lastFrameCycle < 1600000) {
+        GPIO.status_w1tc.val = GOVEE_PIN_MASK;
+        return;
+    }
+
+    uint32_t tRise = nowCycle;
 
     // Filtro glitch: verificar que no sea un pico de ruido (< 125ns = 20 ciclos a 160MHz)
     while (esp_cpu_get_cycle_count() - tRise < 20);
@@ -77,17 +88,12 @@ static void IRAM_ATTR govee_ws2811_isr(void *arg) {
         ledsRead++;
     }
 
-    // Esperar silencio de reset final (línea en bajo continuo > 50us = 8000 ciclos), con timeout máximo de seguridad de 200us
-    uint32_t tReset = esp_cpu_get_cycle_count();
-    uint32_t tMaxReset = tReset;
-    while (esp_cpu_get_cycle_count() - tReset < 8000) {
-        if (*GOVEE_GPIO_IN & GOVEE_PIN_MASK) tReset = esp_cpu_get_cycle_count();
-        if (esp_cpu_get_cycle_count() - tMaxReset > 32000) break; // 200us max
-    }
+    // Registrar ciclo de finalización para el cooldown de 10ms
+    s_lastFrameCycle = esp_cpu_get_cycle_count();
 
     // Limpiar bandera de interrupción y re-activar por registro para la siguiente trama (~32ms después)
     GPIO.status_w1tc.val = GOVEE_PIN_MASK;
-    GPIO.pin[3].int_ena = 1; // 1 = GPIO_INTR_POSEDGE
+    GPIO.pin[3].int_ena = 1; // 1 = CPU0 interrupt enabled
 
     if (ledsRead >= 37) {
         memcpy(s_capturedLeds, temp, 37 * 3);
@@ -98,6 +104,8 @@ static void IRAM_ATTR govee_ws2811_isr(void *arg) {
 
 inline void init_govee_sniffer() {
     if (!s_isrInstalled) {
+        gpio_set_direction(GPIO_NUM_3, GPIO_MODE_INPUT);
+        gpio_set_pull_mode(GPIO_NUM_3, GPIO_PULLDOWN_ONLY);
         gpio_install_isr_service(0);
         gpio_set_intr_type(GPIO_NUM_3, GPIO_INTR_POSEDGE);
         gpio_isr_handler_add(GPIO_NUM_3, govee_ws2811_isr, NULL);
