@@ -33,24 +33,24 @@ IRAM_ATTR inline int capture_govee_frame(uint8_t *ledData, int maxLeds) {
 
     if (!resetDetected) return 0;
 
-    // 2. Entrar en seccion critica: desactiva interrupciones durante la transmision de ~1.1ms
-    taskENTER_CRITICAL(&goveeMutex);
-
-    // 3. Esperar al flanco de subida del primer bit con filtro antirruido
-    uint32_t tRise = 0;
+    // 2. Esperar al flanco de subida del primer bit con interrupciones HABILITADAS (WiFi 100% libre)
+    // Durante los ~32ms de silencio, WiFi y el sistema funcionan sin starvation.
     uint32_t tWaitFirst = esp_cpu_get_cycle_count();
-    while (1) {
-        while (!(*GOVEE_GPIO_IN & GOVEE_PIN_MASK)) {
-            if (esp_cpu_get_cycle_count() - tWaitFirst > 1600000) { // 10ms timeout
-                taskEXIT_CRITICAL(&goveeMutex);
-                return 0;
-            }
+    while (!(*GOVEE_GPIO_IN & GOVEE_PIN_MASK)) {
+        if (esp_cpu_get_cycle_count() - tWaitFirst > 6400000) { // 40ms timeout
+            return 0;
         }
-        tRise = esp_cpu_get_cycle_count();
-        while (esp_cpu_get_cycle_count() - tRise < 20); // 125ns glitch filter
-        if (*GOVEE_GPIO_IN & GOVEE_PIN_MASK) {
-            break; // Pulso valido: Bit 7 de LED 0
-        }
+    }
+
+    // 3. Entrar en seccion critica en el instante exacto del flanco de subida (~12.5ns tras la subida)
+    taskENTER_CRITICAL(&goveeMutex);
+    uint32_t tRise = esp_cpu_get_cycle_count();
+
+    // 4. Filtro antirruido para descartar micro-picos espurios en el bus sin masa (125ns = 20 ciclos)
+    while (esp_cpu_get_cycle_count() - tRise < 20);
+    if (!(*GOVEE_GPIO_IN & GOVEE_PIN_MASK)) {
+        taskEXIT_CRITICAL(&goveeMutex);
+        return 0; // Pico de ruido eléctrico transitorio descartado
     }
 
     // 5. Muestreo WS2811 por punto medio (530ns tras flanco)
