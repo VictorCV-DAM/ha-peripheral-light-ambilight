@@ -16,6 +16,7 @@ esphome:
           id(latencia_media_registrada).publish_state(lat);
           id(govee_signal_active).publish_state(false);
           id(govee_hardware_state).publish_state("Standby");
+          init_govee_sniffer();
 
 esp32:
   board: esp32-c3-devkitm-1
@@ -260,7 +261,7 @@ interval:
           id(lat_sum) = 0.0f;
           id(lat_count) = 0;
 
-  - interval: 35ms
+  - interval: 25ms
     then:
       - lambda: |-
           static int fIzqR = -1, fIzqG = -1, fIzqB = -1;
