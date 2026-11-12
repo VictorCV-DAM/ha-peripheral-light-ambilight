@@ -461,11 +461,11 @@ interval:
           std::string targetCandidate = currentMode;
 
           if (currentMode == "Standby") {
-            // Salida ágil de Standby al encender (~240ms):
+            // Salida instantánea de Standby al encender (~320ms):
             if (!isBlack) {
-              if (consecutiveVideoFrames >= 6) {
+              if (consecutiveVideoFrames >= 8) {
                 targetCandidate = "Vídeo";
-              } else if (consecutiveStaticFrames >= 6) {
+              } else if (consecutiveStaticFrames >= 8) {
                 targetCandidate = "Estático";
               }
             }
@@ -474,8 +474,8 @@ interval:
             if (consecutiveBlackFrames >= 30) {
               // Pantalla/tira apagada en negro durante ~1.2s -> Standby
               targetCandidate = "Standby";
-            } else if (consecutiveVideoFrames >= 10) {
-              // Exige ~400ms continuos de vídeo real dinámico para conmutar a Vídeo
+            } else if (consecutiveVideoFrames >= 8) {
+              // Conmuta a Vídeo en solo ~320ms de vídeo dinámico sostenido
               targetCandidate = "Vídeo";
             }
           } else if (currentMode == "Vídeo") {
@@ -483,8 +483,8 @@ interval:
             if (consecutiveBlackFrames >= 30) {
               // ~1.2s de negro absoluto sostenido -> Standby
               targetCandidate = "Standby";
-            } else if (consecutiveStaticFrames >= 10) {
-              // Exige ~400ms continuos de lámpara fija para conmutar a Estático
+            } else if (consecutiveStaticFrames >= 8) {
+              // Conmuta a Estático en solo ~320ms de lámpara fija uniforme
               targetCandidate = "Estático";
             }
           }
