@@ -29,7 +29,7 @@ logger:
   level: INFO
 
 api:
-  reboot_timeout: 5min
+  reboot_timeout: 0s
   encryption:
     key: "87R9C1MCPvg8ijQB5aM+enPk26Hbs51ah0OtsMBNv6w="
 
@@ -44,7 +44,6 @@ wifi:
   password: !secret wifi_password
   power_save_mode: none
   fast_connect: false
-  reboot_timeout: 3min
   manual_ip:
     static_ip: 192.168.1.49
     gateway: 192.168.1.1
