@@ -301,10 +301,10 @@ interval:
             }
             prevFrameTime = now;
           } else {
-            // Si la línea está en silencio más de 5s -> Standby automático:
-            if (now - lastValidFrameTime > 5000) {
+            // Si la línea está en silencio más de 8s -> Standby automático:
+            if (now - lastValidFrameTime > 8000) {
               if (currentMode != "Standby") {
-                ESP_LOGW("mode", "CAMBIO DE ESTADO: %s -> Standby (sin señal > 5s)", currentMode.c_str());
+                ESP_LOGW("mode", "CAMBIO DE ESTADO: %s -> Standby (sin señal > 8s)", currentMode.c_str());
                 currentMode = "Standby";
                 currentSignalActive = false;
                 consecutiveVideoFrames = 0;
@@ -425,7 +425,7 @@ interval:
             prevRawDerR = derR; prevRawDerG = derG; prevRawDerB = derB;
           }
 
-          // Integrador Leaky-Bucket Asimétrico (inmune a micro-glitches de bus):
+          // Integrador Leaky-Bucket Asimétrico con límites de saturación:
           static int consecutiveBlackFrames = 0;
 
           if (isBlack) {
@@ -435,51 +435,57 @@ interval:
             if (consecutiveStaticFrames > 1) consecutiveStaticFrames -= 2;
             else consecutiveStaticFrames = 0;
           } else if (isGlitch) {
-            // Glitch aislado ignorado: no suma a vídeo ni penaliza estático
+            // Glitch eléctrico aislado: ignorar sin alterar contadores
           } else {
             consecutiveBlackFrames = 0;
-            // Modo Vídeo Real (Ambilight): presencia indiscutible de dispersión cromática entre bordes de pantalla
+            // Modo Vídeo Real (Ambilight): dispersión cromática entre bordes (spread >= 40)
             // o combinación de dispersión moderada con movimiento fluido continuo.
-            bool isRealVideo = (totalSpread >= 50 || (totalSpread >= 25 && tempDelta >= 20));
+            bool isRealVideo = (totalSpread >= 40 || (totalSpread >= 18 && tempDelta >= 15));
             if (isRealVideo) {
               consecutiveVideoFrames++;
               if (consecutiveStaticFrames > 2) consecutiveStaticFrames -= 3;
               else consecutiveStaticFrames = 0;
             } else {
-              // Modo Lámpara (color homogéneo en todo el perímetro, spread < 25)
+              // Modo Lámpara (color uniforme en todo el perímetro, spread < 18 y delta < 15)
               consecutiveStaticFrames++;
               if (consecutiveVideoFrames > 2) consecutiveVideoFrames -= 3;
               else consecutiveVideoFrames = 0;
             }
           }
 
+          // Evitar desbordamiento de contadores:
+          consecutiveVideoFrames = std::min(consecutiveVideoFrames, 100);
+          consecutiveStaticFrames = std::min(consecutiveStaticFrames, 150);
+          consecutiveBlackFrames = std::min(consecutiveBlackFrames, 100);
+
           std::string targetCandidate = currentMode;
 
           if (currentMode == "Standby") {
-            // Salida de Standby al encender:
+            // Salida ágil de Standby al encender (300-400ms):
             if (!isBlack) {
               if (consecutiveVideoFrames >= 8) {
                 targetCandidate = "Vídeo";
-              } else if (consecutiveStaticFrames >= 8) {
+              } else if (consecutiveStaticFrames >= 10) {
                 targetCandidate = "Estático";
               }
             }
           } else if (currentMode == "Estático") {
             // Estando en Estático:
-            if (consecutiveBlackFrames >= 20) {
+            if (consecutiveBlackFrames >= 75) {
+              // Pantalla/tira apagada en negro durante 3.0s continuos -> Standby
               targetCandidate = "Standby";
             } else if (consecutiveVideoFrames >= 30) {
-              // Exige ~1.2s de vídeo real sostenido (spread >= 50 o movimiento con spread).
-              // En modo lámpara fija, vF es SIEMPRE 0 (CERO falsos cambios a vídeo).
+              // Exige ~1.2s de vídeo real sostenido. Los glitches de 1 trama jamás superan vF=2.
               targetCandidate = "Vídeo";
             }
           } else if (currentMode == "Vídeo") {
             // Estando en Vídeo:
-            if (consecutiveBlackFrames >= 25) {
-              // 1.0s de negro absoluto sostenido -> Standby
+            if (consecutiveBlackFrames >= 75) {
+              // 3.0s de negro absoluto sostenido -> Standby (ignora fundidos a negro de cine de 1-2s)
               targetCandidate = "Standby";
-            } else if (consecutiveStaticFrames >= 35) {
-              // Exige ~1.4s continuo de color uniforme de lámpara (spread < 25) para salir de Vídeo.
+            } else if (consecutiveStaticFrames >= 80) {
+              // Exige 3.2 segundos continuos de lámpara fija uniforme para salir de Vídeo.
+              // En una película, las tomas estáticas o diálogos jamás alcanzan 3.2s de uniformidad total.
               targetCandidate = "Estático";
             }
           }

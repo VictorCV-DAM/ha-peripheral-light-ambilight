@@ -17,9 +17,9 @@ IRAM_ATTR inline int capture_govee_frame(uint8_t *ledData, int maxLeds) {
 
     // 1. Detectar el silencio de reset WS2811 (linea en BAJO continuo durante > 60us = 9600 ciclos)
     bool resetDetected = false;
-    while (esp_cpu_get_cycle_count() - tStart < 6400000) { // 40ms max
+    while (esp_cpu_get_cycle_count() - tStart < 9600000) { // 60ms max
         while (*GOVEE_GPIO_IN & GOVEE_PIN_MASK) {
-            if (esp_cpu_get_cycle_count() - tStart > 6400000) return 0;
+            if (esp_cpu_get_cycle_count() - tStart > 9600000) return 0;
         }
         uint32_t tLow = esp_cpu_get_cycle_count();
         while (!(*GOVEE_GPIO_IN & GOVEE_PIN_MASK)) {
@@ -41,7 +41,7 @@ IRAM_ATTR inline int capture_govee_frame(uint8_t *ledData, int maxLeds) {
     uint32_t tWaitFirst = esp_cpu_get_cycle_count();
     while (1) {
         while (!(*GOVEE_GPIO_IN & GOVEE_PIN_MASK)) {
-            if (esp_cpu_get_cycle_count() - tWaitFirst > 1600000) { // 10ms timeout
+            if (esp_cpu_get_cycle_count() - tWaitFirst > 9600000) { // 60ms timeout
                 taskEXIT_CRITICAL(&goveeMutex);
                 return 0;
             }
