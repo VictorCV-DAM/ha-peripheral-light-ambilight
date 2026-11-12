@@ -34,25 +34,26 @@ IRAM_ATTR inline int capture_govee_frame(uint8_t *ledData, int maxLeds) {
 
     if (!resetDetected) return 0;
 
-    // 2. Entrar en seccion critica: desactiva interrupciones durante la transmision de ~1.1ms
-    taskENTER_CRITICAL(&goveeMutex);
-
-    // 3. Esperar al flanco de subida del primer bit con filtro antirruido
+    // 2. Esperar al flanco de subida del primer bit con filtro antirruido
+    // IMPORTANTE: NO entrar en seccion critica aqui; mantener interrupciones activas
+    // para que la pila WiFi de FreeRTOS en ESP32-C3 mono-nucleo no sufra starvation.
     uint32_t tRise = 0;
     uint32_t tWaitFirst = esp_cpu_get_cycle_count();
     while (1) {
         while (!(*GOVEE_GPIO_IN & GOVEE_PIN_MASK)) {
             if (esp_cpu_get_cycle_count() - tWaitFirst > 1600000) { // 10ms timeout
-                taskEXIT_CRITICAL(&goveeMutex);
                 return 0;
             }
         }
         tRise = esp_cpu_get_cycle_count();
         while (esp_cpu_get_cycle_count() - tRise < 20); // 125ns glitch filter
         if (*GOVEE_GPIO_IN & GOVEE_PIN_MASK) {
-            break; // Pulso valido: Bit 7 de LED 0
+            break; // Pulso valido: Bit 7 de LED 0 confirmado
         }
     }
+
+    // 3. Entrar en seccion critica: desactiva interrupciones UNICAMENTE durante la transmision activa (~1.1ms)
+    taskENTER_CRITICAL(&goveeMutex);
 
     // 5. Muestreo WS2811 por punto medio (530ns tras flanco)
     int ledsRead = 0;

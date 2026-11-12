@@ -433,34 +433,35 @@ interval:
             // Glitch eléctrico aislado: ignorar sin alterar contadores
           } else {
             consecutiveBlackFrames = 0;
-            // Modo Vídeo Real (Ambilight):
-            // 1. O bien hay una dispersión cromática masiva entre bordes (spread >= 80, ej: azul izq y rojo der)
-            // 2. O bien hay dispersión moderada (spread >= 30) ACOMPAÑADA de movimiento dinámico continuo (tempDelta >= 15).
-            // En modo lámpara/estático (incluso en blanco puro con caída de tensión de hasta 40-50 de spread):
-            // como la luz es fija, tempDelta es prácticamente 0 (ruido < 10).
-            // Por tanto, la caída de tensión estática NUNCA se confunde con vídeo.
-            bool isRealVideo = (totalSpread >= 80 || (totalSpread >= 30 && tempDelta >= 15));
+            // Modo Vídeo Real (Ambilight) vs Modo Lámpara / Estático:
+            // 1. En modo lámpara / estático: todos los bordes reciben el mismo color uniforme.
+            //    Incluso al cambiar de color en la app Govee (tempDelta alto), la dispersión entre bordes
+            //    (totalSpread) se mantiene baja (< 35). Por tanto, totalSpread < 35 NUNCA es vídeo.
+            // 2. En modo vídeo: la cámara enfoca la pantalla de la TV, generando dispersión cromática real
+            //    entre los distintos bordes de la pantalla (totalSpread >= 60), o dispersión moderada
+            //    con movimiento continuo (totalSpread >= 35 && tempDelta >= 20).
+            bool isRealVideo = (totalSpread >= 60 || (totalSpread >= 35 && tempDelta >= 20));
             if (isRealVideo) {
               consecutiveVideoFrames++;
-              if (consecutiveStaticFrames > 2) consecutiveStaticFrames -= 3;
+              if (consecutiveStaticFrames > 1) consecutiveStaticFrames -= 2;
               else consecutiveStaticFrames = 0;
             } else {
               // Modo Lámpara / Color fijo (incluso cambiando de color o con caída de tensión)
               consecutiveStaticFrames++;
-              if (consecutiveVideoFrames > 2) consecutiveVideoFrames -= 3;
+              if (consecutiveVideoFrames > 1) consecutiveVideoFrames -= 2;
               else consecutiveVideoFrames = 0;
             }
           }
 
           // Evitar desbordamiento de contadores:
-          consecutiveVideoFrames = std::min(consecutiveVideoFrames, 30);
-          consecutiveStaticFrames = std::min(consecutiveStaticFrames, 30);
-          consecutiveBlackFrames = std::min(consecutiveBlackFrames, 60);
+          consecutiveVideoFrames = std::min(consecutiveVideoFrames, 25);
+          consecutiveStaticFrames = std::min(consecutiveStaticFrames, 25);
+          consecutiveBlackFrames = std::min(consecutiveBlackFrames, 50);
 
           std::string targetCandidate = currentMode;
 
           if (currentMode == "Standby") {
-            // Salida ágil de Standby al encender (~250ms):
+            // Salida ágil de Standby al encender (~240ms):
             if (!isBlack) {
               if (consecutiveVideoFrames >= 6) {
                 targetCandidate = "Vídeo";
@@ -470,20 +471,20 @@ interval:
             }
           } else if (currentMode == "Estático") {
             // Estando en Estático:
-            if (consecutiveBlackFrames >= 40) {
-              // Pantalla/tira apagada en negro durante ~1.6s -> Standby
+            if (consecutiveBlackFrames >= 30) {
+              // Pantalla/tira apagada en negro durante ~1.2s -> Standby
               targetCandidate = "Standby";
-            } else if (consecutiveVideoFrames >= 15) {
-              // Exige ~600ms continuos de vídeo real dinámico para conmutar a Vídeo
+            } else if (consecutiveVideoFrames >= 10) {
+              // Exige ~400ms continuos de vídeo real dinámico para conmutar a Vídeo
               targetCandidate = "Vídeo";
             }
           } else if (currentMode == "Vídeo") {
             // Estando en Vídeo:
-            if (consecutiveBlackFrames >= 40) {
-              // ~1.6s de negro absoluto sostenido -> Standby
+            if (consecutiveBlackFrames >= 30) {
+              // ~1.2s de negro absoluto sostenido -> Standby
               targetCandidate = "Standby";
-            } else if (consecutiveStaticFrames >= 15) {
-              // Exige ~600ms continuos de lámpara fija para conmutar a Estático
+            } else if (consecutiveStaticFrames >= 10) {
+              // Exige ~400ms continuos de lámpara fija para conmutar a Estático
               targetCandidate = "Estático";
             }
           }
