@@ -433,16 +433,19 @@ interval:
             // Glitch eléctrico aislado: ignorar sin alterar contadores
           } else {
             consecutiveBlackFrames = 0;
-            // Modo Vídeo Real (Ambilight): dispersión cromática real entre bordes distintos de pantalla.
-            // En modo estático (incluso al cambiar bruscamente de color), todos los bordes cambian juntos
-            // al mismo tono (totalSpread < 35). Un cambio de color uniforme NUNCA es vídeo.
-            bool isRealVideo = (totalSpread >= 55 || (totalSpread >= 35 && tempDelta >= 35));
+            // Modo Vídeo Real (Ambilight):
+            // 1. O bien hay una dispersión cromática masiva entre bordes (spread >= 80, ej: azul izq y rojo der)
+            // 2. O bien hay dispersión moderada (spread >= 30) ACOMPAÑADA de movimiento dinámico continuo (tempDelta >= 15).
+            // En modo lámpara/estático (incluso en blanco puro con caída de tensión de hasta 40-50 de spread):
+            // como la luz es fija, tempDelta es prácticamente 0 (ruido < 10).
+            // Por tanto, la caída de tensión estática NUNCA se confunde con vídeo.
+            bool isRealVideo = (totalSpread >= 80 || (totalSpread >= 30 && tempDelta >= 15));
             if (isRealVideo) {
               consecutiveVideoFrames++;
               if (consecutiveStaticFrames > 2) consecutiveStaticFrames -= 3;
               else consecutiveStaticFrames = 0;
             } else {
-              // Modo Lámpara (color uniforme en todo el perímetro, totalSpread < 35)
+              // Modo Lámpara / Color fijo (incluso cambiando de color o con caída de tensión)
               consecutiveStaticFrames++;
               if (consecutiveVideoFrames > 2) consecutiveVideoFrames -= 3;
               else consecutiveVideoFrames = 0;
@@ -470,8 +473,8 @@ interval:
             if (consecutiveBlackFrames >= 40) {
               // Pantalla/tira apagada en negro durante ~1.6s -> Standby
               targetCandidate = "Standby";
-            } else if (consecutiveVideoFrames >= 25) {
-              // Exige ~1.0s continuo de vídeo real con dispersión espacial
+            } else if (consecutiveVideoFrames >= 15) {
+              // Exige ~600ms continuos de vídeo real dinámico para conmutar a Vídeo
               targetCandidate = "Vídeo";
             }
           } else if (currentMode == "Vídeo") {
@@ -479,8 +482,8 @@ interval:
             if (consecutiveBlackFrames >= 40) {
               // ~1.6s de negro absoluto sostenido -> Standby
               targetCandidate = "Standby";
-            } else if (consecutiveStaticFrames >= 20) {
-              // ~800ms continuos de color uniforme en todos los bordes -> Estático
+            } else if (consecutiveStaticFrames >= 15) {
+              // Exige ~600ms continuos de lámpara fija para conmutar a Estático
               targetCandidate = "Estático";
             }
           }

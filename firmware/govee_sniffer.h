@@ -12,15 +12,15 @@
 static portMUX_TYPE goveeMutex = portMUX_INITIALIZER_UNLOCKED;
 
 // Decodificador WS2811 de Ultra-Precision para Govee T1 (H6199) - 37 LEDs (912/888 bits)
+// Version exacta del HITO da7c289: Seccion critica atomica de 1.1ms para evitar corrupcion de bits por interrupciones del kernel
 IRAM_ATTR inline int capture_govee_frame(uint8_t *ledData, int maxLeds) {
     uint32_t tStart = esp_cpu_get_cycle_count();
 
     // 1. Detectar el silencio de reset WS2811 (linea en BAJO continuo durante > 60us = 9600 ciclos)
-    // Timeout máximo de 5ms (800000 ciclos a 160MHz) para no retener el CPU ni la pila WiFi
     bool resetDetected = false;
-    while (esp_cpu_get_cycle_count() - tStart < 800000) { // 5ms max
+    while (esp_cpu_get_cycle_count() - tStart < 6400000) { // 40ms max
         while (*GOVEE_GPIO_IN & GOVEE_PIN_MASK) {
-            if (esp_cpu_get_cycle_count() - tStart > 800000) return 0;
+            if (esp_cpu_get_cycle_count() - tStart > 6400000) return 0;
         }
         uint32_t tLow = esp_cpu_get_cycle_count();
         while (!(*GOVEE_GPIO_IN & GOVEE_PIN_MASK)) {
