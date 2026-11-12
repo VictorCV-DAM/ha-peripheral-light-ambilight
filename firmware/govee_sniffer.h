@@ -19,12 +19,15 @@ static bool s_isrInstalled = false;
 static void IRAM_ATTR govee_ws2811_isr(void *arg) {
     uint32_t tRise = esp_cpu_get_cycle_count();
 
-    // Filtro glitch: verificar que no sea un pico de ruido (< 125ns = 20 ciclos)
+    // Filtro glitch: verificar que no sea un pico de ruido (< 125ns = 20 ciclos a 160MHz)
     while (esp_cpu_get_cycle_count() - tRise < 20);
     if (!(*GOVEE_GPIO_IN & GOVEE_PIN_MASK)) {
         GPIO.status_w1tc.val = GOVEE_PIN_MASK;
         return; // Ruido espurio
     }
+
+    // Desactivar temporalmente la interrupción para evitar disparos repetidos durante los 888 bits
+    gpio_intr_disable(GPIO_NUM_3);
 
     uint8_t temp[GOVEE_MAX_LEDS * 3];
     int ledsRead = 0;
@@ -74,14 +77,17 @@ static void IRAM_ATTR govee_ws2811_isr(void *arg) {
         ledsRead++;
     }
 
-    // Esperar silencio de reset final (línea en bajo continuo > 50us)
+    // Esperar silencio de reset final (línea en bajo continuo > 50us = 8000 ciclos), con timeout máximo de seguridad de 200us
     uint32_t tReset = esp_cpu_get_cycle_count();
-    while (esp_cpu_get_cycle_count() - tReset < 8000) { // 50us = 8000 ciclos a 160MHz
+    uint32_t tMaxReset = tReset;
+    while (esp_cpu_get_cycle_count() - tReset < 8000) {
         if (*GOVEE_GPIO_IN & GOVEE_PIN_MASK) tReset = esp_cpu_get_cycle_count();
+        if (esp_cpu_get_cycle_count() - tMaxReset > 32000) break; // 200us max
     }
 
-    // Limpiar cualquier interrupción acumulada durante la captura de los 888 bits
+    // Limpiar bandera de interrupción y re-activar para la siguiente trama (~32ms después)
     GPIO.status_w1tc.val = GOVEE_PIN_MASK;
+    gpio_intr_enable(GPIO_NUM_3);
 
     if (ledsRead >= 37) {
         memcpy(s_capturedLeds, temp, 37 * 3);

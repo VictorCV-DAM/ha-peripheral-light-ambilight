@@ -30,7 +30,7 @@ logger:
   level: INFO
 
 api:
-  reboot_timeout: 0s
+  reboot_timeout: 5min
   encryption:
     key: "87R9C1MCPvg8ijQB5aM+enPk26Hbs51ah0OtsMBNv6w="
 
