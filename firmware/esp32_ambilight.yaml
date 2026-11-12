@@ -16,6 +16,7 @@ esphome:
           id(latencia_media_registrada).publish_state(lat);
           id(govee_signal_active).publish_state(false);
           id(govee_hardware_state).publish_state("Standby");
+          init_govee_sniffer();
 
 esp32:
   board: esp32-c3-devkitm-1
@@ -260,7 +261,7 @@ interval:
           id(lat_sum) = 0.0f;
           id(lat_count) = 0;
 
-  - interval: 40ms
+  - interval: 20ms
     then:
       - lambda: |-
           static int fIzqR = -1, fIzqG = -1, fIzqB = -1;
@@ -292,9 +293,10 @@ interval:
           const int MAX_LEDS = 37;
           uint8_t ledData[MAX_LEDS * 3] = {0};
 
-          int ledsLeidos = capture_govee_frame(ledData, MAX_LEDS);
+          bool isNew = false;
+          int ledsLeidos = get_latest_govee_frame(ledData, MAX_LEDS, &isNew);
 
-          if (ledsLeidos >= 37) {
+          if (isNew && ledsLeidos >= 37) {
             lastValidFrameTime = now;
             if (prevFrameTime > 0) {
               lastFrameInterval = now - prevFrameTime;
@@ -312,11 +314,6 @@ interval:
                 id(govee_signal_active).publish_state(false);
                 id(govee_hardware_state).publish_state("Standby");
               }
-            }
-
-            if (millis() - tDiag >= 2000) {
-              ESP_LOGW("sniffer", "Trama incompleta o sin señal: %d/37 leds (GPIO3=%d).", ledsLeidos, id(pin_datos).state);
-              tDiag = millis();
             }
             return;
           }

@@ -3,23 +3,32 @@
 #include "esp_cpu.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "freertos/portmacro.h"
 #include <stdint.h>
+#include <string.h>
 
 #define GOVEE_PIN_MASK 0x08 // GPIO3
 #define GOVEE_GPIO_IN ((volatile uint32_t *)0x6000403C)
 
 static portMUX_TYPE goveeMutex = portMUX_INITIALIZER_UNLOCKED;
 
-// Decodificador WS2811 de Ultra-Precision para Govee T1 (H6199) - 37 LEDs (912/888 bits)
-IRAM_ATTR inline int capture_govee_frame(uint8_t *ledData, int maxLeds) {
+#define SNIFFER_MAX_LEDS 37
+static uint8_t s_sharedLedData[SNIFFER_MAX_LEDS * 3] = {0};
+static volatile int s_sharedLedsCount = 0;
+static volatile uint32_t s_lastFrameTimestamp = 0;
+static volatile bool s_newFrameAvailable = false;
+static TaskHandle_t s_snifferTaskHandle = NULL;
+
+// Decodificador WS2811 de Ultra-Precision para Govee T1 (H6199) - 37 LEDs
+IRAM_ATTR inline int capture_govee_raw(uint8_t *ledData, int maxLeds, uint32_t maxWaitCycles) {
     uint32_t tStart = esp_cpu_get_cycle_count();
 
-    // 1. Detectar el silencio de reset WS2811 (linea en BAJO continuo durante > 60us = 9600 ciclos)
+    // 1. Detectar silencio de reset (linea en BAJO continuo durante > 60us = 9600 ciclos)
     bool resetDetected = false;
-    while (esp_cpu_get_cycle_count() - tStart < 9600000) { // 60ms max
+    while (esp_cpu_get_cycle_count() - tStart < maxWaitCycles) {
         while (*GOVEE_GPIO_IN & GOVEE_PIN_MASK) {
-            if (esp_cpu_get_cycle_count() - tStart > 9600000) return 0;
+            if (esp_cpu_get_cycle_count() - tStart > maxWaitCycles) return 0;
         }
         uint32_t tLow = esp_cpu_get_cycle_count();
         while (!(*GOVEE_GPIO_IN & GOVEE_PIN_MASK)) {
@@ -33,27 +42,25 @@ IRAM_ATTR inline int capture_govee_frame(uint8_t *ledData, int maxLeds) {
 
     if (!resetDetected) return 0;
 
-    // 2. Entrar en seccion critica: desactiva interrupciones durante la transmision de ~1.1ms
-    taskENTER_CRITICAL(&goveeMutex);
-
-    // 3. Esperar al flanco de subida del primer bit con filtro antirruido
+    // 2. Esperar al flanco de subida del primer bit (Bit 7 de LED 0)
     uint32_t tRise = 0;
     uint32_t tWaitFirst = esp_cpu_get_cycle_count();
     while (1) {
         while (!(*GOVEE_GPIO_IN & GOVEE_PIN_MASK)) {
-            if (esp_cpu_get_cycle_count() - tWaitFirst > 9600000) { // 60ms timeout
-                taskEXIT_CRITICAL(&goveeMutex);
+            if (esp_cpu_get_cycle_count() - tWaitFirst > maxWaitCycles) {
                 return 0;
             }
         }
         tRise = esp_cpu_get_cycle_count();
         while (esp_cpu_get_cycle_count() - tRise < 20); // 125ns glitch filter
         if (*GOVEE_GPIO_IN & GOVEE_PIN_MASK) {
-            break; // Pulso valido: Bit 7 de LED 0
+            break; // Flanco confirmado
         }
     }
 
-    // 5. Muestreo WS2811 por punto medio (530ns tras flanco)
+    // 3. SECCION CRITICA: Solo durante la lectura de los 37 LEDs (~1.1ms)
+    taskENTER_CRITICAL(&goveeMutex);
+
     int ledsRead = 0;
     bool frameDone = false;
 
@@ -74,7 +81,7 @@ IRAM_ATTR inline int capture_govee_frame(uint8_t *ledData, int maxLeds) {
                         tRise = esp_cpu_get_cycle_count();
                         while (esp_cpu_get_cycle_count() - tRise < 15); // 95ns glitch filter
                         if (*GOVEE_GPIO_IN & GOVEE_PIN_MASK) {
-                            break; // Flanco real confirmado
+                            break;
                         }
                     }
                     if (frameDone) break;
@@ -83,7 +90,6 @@ IRAM_ATTR inline int capture_govee_frame(uint8_t *ledData, int maxLeds) {
                 // Punto medio del bit (85 ciclos = ~530ns)
                 while (esp_cpu_get_cycle_count() - tRise < 85);
 
-                // Muestrear valor
                 if (*GOVEE_GPIO_IN & GOVEE_PIN_MASK) {
                     byteVal |= (1 << bit);
                 }
@@ -91,7 +97,7 @@ IRAM_ATTR inline int capture_govee_frame(uint8_t *ledData, int maxLeds) {
                 // Esperar caida a BAJO
                 uint32_t tWaitFall = esp_cpu_get_cycle_count();
                 while (*GOVEE_GPIO_IN & GOVEE_PIN_MASK) {
-                    if (esp_cpu_get_cycle_count() - tWaitFall > 3200) { // 20us timeout
+                    if (esp_cpu_get_cycle_count() - tWaitFall > 3200) {
                         frameDone = true;
                         break;
                     }
@@ -107,4 +113,62 @@ IRAM_ATTR inline int capture_govee_frame(uint8_t *ledData, int maxLeds) {
 
     taskEXIT_CRITICAL(&goveeMutex);
     return ledsRead;
+}
+
+// Tarea en segundo plano FreeRTOS (Phase-Locked Loop)
+static void govee_sniffer_task(void *pvParameters) {
+    uint8_t tempBuffer[SNIFFER_MAX_LEDS * 3];
+    while (true) {
+        // Timeout de captura: 15ms (2.400.000 ciclos a 160MHz)
+        int count = capture_govee_raw(tempBuffer, SNIFFER_MAX_LEDS, 2400000);
+        if (count >= SNIFFER_MAX_LEDS) {
+            taskENTER_CRITICAL(&goveeMutex);
+            memcpy(s_sharedLedData, tempBuffer, SNIFFER_MAX_LEDS * 3);
+            s_sharedLedsCount = count;
+            s_newFrameAvailable = true;
+            taskEXIT_CRITICAL(&goveeMutex);
+
+            s_lastFrameTimestamp = esp_log_timestamp();
+
+            // Siguiente trama vendrá en ~33-40ms. Dormimos 22ms dejando 100% CPU a WiFi y ESPHome
+            vTaskDelay(pdMS_TO_TICKS(22));
+        } else {
+            // Sin señal o pausa entre tramas. Dormimos 25ms para no saturar CPU en Standby
+            vTaskDelay(pdMS_TO_TICKS(25));
+        }
+    }
+}
+
+inline void init_govee_sniffer() {
+    if (s_snifferTaskHandle == NULL) {
+        xTaskCreatePinnedToCore(
+            govee_sniffer_task,
+            "gov_sniffer",
+            4096,
+            NULL,
+            1, // Prioridad 1 (la misma que loop, inferior a WiFi 19-23)
+            &s_snifferTaskHandle,
+            0  // Core 0 (ESP32-C3)
+        );
+    }
+}
+
+// Función no bloqueante para el intervalo de ESPHome (se ejecuta en nanosegundos)
+inline int get_latest_govee_frame(uint8_t *dest, int maxLeds, bool *isNew) {
+    taskENTER_CRITICAL(&goveeMutex);
+    int count = s_sharedLedsCount;
+    *isNew = s_newFrameAvailable;
+    s_newFrameAvailable = false;
+    if (count > 0) {
+        int copyLeds = (count < maxLeds) ? count : maxLeds;
+        memcpy(dest, s_sharedLedData, copyLeds * 3);
+    }
+    taskEXIT_CRITICAL(&goveeMutex);
+    return count;
+}
+
+// Mantener compatibilidad directa si se invoca legacy
+inline int capture_govee_frame(uint8_t *ledData, int maxLeds) {
+    bool isNew = false;
+    return get_latest_govee_frame(ledData, maxLeds, &isNew);
 }
