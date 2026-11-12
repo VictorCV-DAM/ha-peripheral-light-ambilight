@@ -226,7 +226,8 @@ number:
 
 script:
   - id: enviar_color_ha
-    mode: restart
+    mode: parallel
+    max_runs: 10
     parameters:
       entidad: string
       r: int
@@ -556,10 +557,10 @@ interval:
           bool force = (now - lastForceSend > 15000);
 
           float trans = id(velocidad_transicion).state;
-          uint32_t minInterval = 100;
+          uint32_t minInterval = 60;
           if (trans > 0.01f) {
-            minInterval = (uint32_t)(trans * 1000.0f);
-            if (minInterval < 100) minInterval = 100;
+            minInterval = (uint32_t)(trans * 750.0f);
+            if (minInterval < 60) minInterval = 60;
           }
 
           bool sentAny = false;

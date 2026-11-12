@@ -41,7 +41,7 @@ IRAM_ATTR inline int capture_govee_frame(uint8_t *ledData, int maxLeds) {
     uint32_t tWaitFirst = esp_cpu_get_cycle_count();
     while (1) {
         while (!(*GOVEE_GPIO_IN & GOVEE_PIN_MASK)) {
-            if (esp_cpu_get_cycle_count() - tWaitFirst > 1600000) { // 10ms timeout
+            if (esp_cpu_get_cycle_count() - tWaitFirst > 48000) { // 300us timeout maximo en seccion critica (cero starvation WiFi)
                 taskEXIT_CRITICAL(&goveeMutex);
                 return 0;
             }
