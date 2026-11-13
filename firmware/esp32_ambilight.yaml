@@ -460,31 +460,36 @@ interval:
             prevRawDerR = derR; prevRawDerG = derG; prevRawDerB = derB;
           }
 
+          // Salida de Standby por señal activa sostenida (>300ms de datos válidos no-negro):
+          static int consecutiveAwakeFrames = 0;
+          if (isBlack) {
+            consecutiveAwakeFrames = 0;
+          } else {
+            consecutiveAwakeFrames++;
+          }
+          consecutiveAwakeFrames = std::min(consecutiveAwakeFrames, 100);
+
           // Integrador Leaky-Bucket Asimétrico con límites de saturación:
           if (isTransientBlackDrop) {
             // Ignorar micro-corte de 1..3 frames sin destruir sF ni vF
           } else if (isBlack) {
-            if (consecutiveVideoFrames > 1) consecutiveVideoFrames -= 2;
-            else consecutiveVideoFrames = 0;
-            if (consecutiveStaticFrames > 1) consecutiveStaticFrames -= 2;
-            else consecutiveStaticFrames = 0;
+            if (consecutiveVideoFrames > 0) consecutiveVideoFrames--;
+            if (consecutiveStaticFrames > 0) consecutiveStaticFrames--;
           } else {
             // Modo Vídeo Real (Ambilight) vs Modo Lámpara / Estático:
-            // 1. En lámpara / estático: todos los LEDs reciben el mismo color homogéneo (spread < 25).
-            //    Cualquier ruido eléctrico en el cable único sin masa común puede generar un micro-salto
-            //    de valor (tempDelta), pero NUNCA dispersión espacial continua entre bordes de la TV.
-            // 2. En vídeo: contraste espacial real entre bordes de la pantalla (totalSpread >= 35 o chromaSpread >= 30),
-            //    o combinación de dispersión con dinamismo continuo (totalSpread >= 20 && tempDelta >= 15).
-            bool isRealVideo = (totalSpread >= 35 || chromaSpread >= 30 || (totalSpread >= 20 && tempDelta >= 15));
+            // 1. En lámpara / estático: el color es totalmente estático e inmóvil en el tiempo (tempDelta == 0).
+            // 2. En vídeo:
+            //    a) Modo multizona (Part): contraste espacial entre bordes (totalSpread >= 20 o chromaSpread >= 20).
+            //    b) Modo escena homogénea o todo-en-uno (All): dinamismo temporal de vídeo (tempDelta >= 15).
+            //    c) Cambio moderado continuo (totalSpread >= 10 && tempDelta >= 10).
+            bool isRealVideo = (totalSpread >= 20 || chromaSpread >= 20 || tempDelta >= 15 || (totalSpread >= 10 && tempDelta >= 10));
             if (isRealVideo) {
               consecutiveVideoFrames++;
-              if (consecutiveStaticFrames > 1) consecutiveStaticFrames -= 2;
-              else consecutiveStaticFrames = 0;
+              if (consecutiveStaticFrames > 0) consecutiveStaticFrames--;
             } else {
               // Modo Lámpara / Color fijo (inmóvil e idéntico en todo el perímetro)
               consecutiveStaticFrames++;
-              if (consecutiveVideoFrames > 1) consecutiveVideoFrames -= 2;
-              else consecutiveVideoFrames = 0;
+              if (consecutiveVideoFrames > 0) consecutiveVideoFrames--;
             }
           }
 
@@ -496,13 +501,11 @@ interval:
           std::string targetCandidate = currentMode;
 
           if (currentMode == "Standby") {
-            // Salida de Standby al encender la TV o la lámpara:
-            // Con cable único sin masa GND común, las micro-oscilaciones inducidas de 50Hz duran a lo sumo 10-15 fotogramas.
-            // Exigir 40 frames (~1.6s) de señal sostenida para salir de Standby elimina cualquier falso despertar por ruido de línea.
-            if (!isBlack) {
-              if (consecutiveVideoFrames >= 40) {
+            // Salida instantánea de Standby al detectar luz/señal continua (>20 frames encendidos ~800ms):
+            if (!isBlack && consecutiveAwakeFrames >= 20) {
+              if (consecutiveVideoFrames >= 8) {
                 targetCandidate = "Vídeo";
-              } else if (consecutiveStaticFrames >= 40) {
+              } else {
                 targetCandidate = "Estático";
               }
             }
@@ -511,10 +514,8 @@ interval:
             if (consecutiveBlackFrames >= 30) {
               // Pantalla/tira apagada en negro durante ~1.2s -> Standby
               targetCandidate = "Standby";
-            } else if (consecutiveVideoFrames >= 45) {
-              // Requiere ~1.8s (45 frames) ininterrumpidos de vídeo dinámico real para conmutar a Vídeo.
-              // Con un cable único sin masa GND común, las ráfagas parásitas inducidas de 50Hz duran a lo sumo 10-15 frames.
-              // 45 frames garantiza inmunidad matemática absoluta a cualquier ruido de bus sin GND.
+            } else if (consecutiveVideoFrames >= 14) {
+              // Con ~560ms (14 frames) de vídeo dinámico conmuta a Vídeo con solidez y rapidez.
               targetCandidate = "Vídeo";
             }
           } else if (currentMode == "Vídeo") {
@@ -522,9 +523,10 @@ interval:
             if (consecutiveBlackFrames >= 30) {
               // ~1.2s de negro absoluto sostenido -> Standby
               targetCandidate = "Standby";
-            } else if (consecutiveStaticFrames >= 45) {
-              // Exige ~1.8s (45 frames) continuos de lámpara fija inmóvil (spread<40 y delta<15)
-              // para conmutar de Vídeo a Estático. Esto hace matemáticamente IMPOSIBLE el rebote en vídeo.
+            } else if (consecutiveStaticFrames >= 70) {
+              // Exige ~2.8s (70 frames) continuos e ininterrumpidos de lámpara fija inmóvil (spread<10 y delta<10)
+              // para abandonar Vídeo. En cine/vídeo normal, las escenas con pausas o fondos planos duran 1..2s.
+              // Con 70 frames nunca se degrada a Estático durante una película o vídeo.
               targetCandidate = "Estático";
             }
           }
