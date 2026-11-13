@@ -486,9 +486,10 @@ interval:
             if (consecutiveStaticFrames > 0) consecutiveStaticFrames--;
           } else {
             // Detección de Dinamismo y Dispersión:
-            // 1. isStrongVideo: Evidencia inequívoca de vídeo multizona o cambio dinámico real en la TV.
-            //    Imposible de generar por ruido eléctrico en un cable único sin masa común.
-            bool isStrongVideo = (totalSpread >= 26 || chromaSpread >= 22 || (totalSpread >= 12 && tempDelta >= 25));
+            // 1. isStrongVideo: Evidencia física pura de vídeo multizona (contraste espacial real entre bordes de la TV).
+            //    En cualquier modo de color estático (fijo o cambiando entre colores en la app), todos los LEDs reciben el mismo
+            //    color en todo el perímetro (spread=0), por lo que isStrongVideo es SIEMPRE FALSO al cambiar de color.
+            bool isStrongVideo = (totalSpread >= 26 || chromaSpread >= 22);
 
             // 2. isVideoActivity: Sensibilidad continua para retener el modo Vídeo una vez activo
             //    (incluso en escenas de cine con fondos planos o transiciones suaves).
@@ -530,7 +531,7 @@ interval:
           if (currentMode == "Standby") {
             // Salida instantánea de Standby al detectar luz/señal continua (>20 frames encendidos ~800ms):
             if (!isBlack && consecutiveAwakeFrames >= 20) {
-              if (consecutiveStrongVideoFrames >= 8 || consecutiveVideoFrames >= 15) {
+              if (consecutiveStrongVideoFrames >= 8) {
                 targetCandidate = "Vídeo";
               } else {
                 targetCandidate = "Estático";
@@ -541,11 +542,11 @@ interval:
             if (consecutiveBlackFrames >= 30) {
               // Pantalla/tira apagada en negro durante ~1.2s -> Standby
               targetCandidate = "Standby";
-            } else if (consecutiveStrongVideoFrames >= 10 || consecutiveVideoFrames >= 35) {
-              // Para salir de Estático e ir a Vídeo, se EXIGE evidencia sólida de vídeo real:
-              // - 10 frames (~400ms) de contraste espacial entre zonas de la TV (totalSpread>=26) o dinamismo real,
-              // - O 35 frames (~1.4s) continuos de actividad de vídeo sostenida.
-              // El ruido de masa flotante en estático (spread=0, dt puntual) NUNCA activa esto.
+            } else if (consecutiveStrongVideoFrames >= 10) {
+              // Para salir de Estático e ir a Vídeo, se EXIGE contraste espacial multizona real (totalSpread>=26)
+              // sostenido durante 10 frames (~400ms).
+              // Cambiar de un color a otro en la app Govee afecta a todos los LEDs por igual (spread=0),
+              // por lo que NUNCA provoca falsos saltos a Vídeo.
               targetCandidate = "Vídeo";
             }
           } else if (currentMode == "Vídeo") {
