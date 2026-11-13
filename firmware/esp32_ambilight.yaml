@@ -471,7 +471,12 @@ interval:
             if (consecutiveStaticFrames > 1) consecutiveStaticFrames -= 2;
             else consecutiveStaticFrames = 0;
           } else {
-            bool isRealVideo = (chromaSpread >= 48 || (chromaSpread >= 32 && tempDelta >= 20));
+            // Modo Vídeo Real (Ambilight) vs Modo Lámpara / Estático:
+            // Para ser vídeo real se requiere dispersión cromática contrastada (chromaSpread >= 65),
+            // o dispersión moderada con movimiento dinámico entre fotogramas (chromaSpread >= 45 && tempDelta >= 25).
+            // En estático, los glitches eléctricos de un cable sin GND pueden dar picos aislados de spread,
+            // pero nunca cromatismo continuo entre las 4 zonas.
+            bool isRealVideo = (chromaSpread >= 65 || (chromaSpread >= 45 && tempDelta >= 25));
             if (isRealVideo) {
               consecutiveVideoFrames++;
               if (consecutiveStaticFrames > 1) consecutiveStaticFrames -= 2;
@@ -485,16 +490,16 @@ interval:
           }
 
           // Evitar desbordamiento de contadores:
-          consecutiveVideoFrames = std::min(consecutiveVideoFrames, 25);
-          consecutiveStaticFrames = std::min(consecutiveStaticFrames, 25);
+          consecutiveVideoFrames = std::min(consecutiveVideoFrames, 35);
+          consecutiveStaticFrames = std::min(consecutiveStaticFrames, 35);
           consecutiveBlackFrames = std::min(consecutiveBlackFrames, 50);
 
           std::string targetCandidate = currentMode;
 
           if (currentMode == "Standby") {
-            // Salida instantánea de Standby al encender (~320ms):
+            // Salida instantánea de Standby al encender (~320ms - 480ms):
             if (!isBlack) {
-              if (consecutiveVideoFrames >= 8) {
+              if (consecutiveVideoFrames >= 12) {
                 targetCandidate = "Vídeo";
               } else if (consecutiveStaticFrames >= 8) {
                 targetCandidate = "Estático";
@@ -505,8 +510,9 @@ interval:
             if (consecutiveBlackFrames >= 30) {
               // Pantalla/tira apagada en negro durante ~1.2s -> Standby
               targetCandidate = "Standby";
-            } else if (consecutiveVideoFrames >= 8) {
-              // Conmuta a Vídeo en solo ~320ms de vídeo dinámico sostenido
+            } else if (consecutiveVideoFrames >= 16) {
+              // Requiere ~640ms de vídeo sostenido real (16 frames) para pasar de Estático a Vídeo.
+              // Esto elimina al 100% los micro-glitches de ruido que duran 2-4 frames en cable sin masa.
               targetCandidate = "Vídeo";
             }
           } else if (currentMode == "Vídeo") {
@@ -515,7 +521,7 @@ interval:
               // ~1.2s de negro absoluto sostenido -> Standby
               targetCandidate = "Standby";
             } else if (consecutiveStaticFrames >= 8) {
-              // Conmuta a Estático en solo ~320ms de lámpara fija uniforme
+              // Conmuta de vuelta a Estático rápidamente (~320ms) en cuanto la luz se fija uniforme
               targetCandidate = "Estático";
             }
           }
