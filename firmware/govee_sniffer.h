@@ -100,8 +100,8 @@ IRAM_ATTR inline int capture_govee_frame(uint8_t *ledData, int maxLeds) {
                     if (frameDone) break;
                 }
 
-                // Punto medio real del bit sin GND (68 ciclos = ~425ns: T0H ~220ns, T1H ~500ns)
-                while (esp_cpu_get_cycle_count() - tRise < 68);
+                // Punto medio del bit (85 ciclos = ~530ns) - 100% identico al HITO da7c289
+                while (esp_cpu_get_cycle_count() - tRise < 85);
 
                 // Muestrear valor
                 if (*GOVEE_GPIO_IN & GOVEE_PIN_MASK) {
