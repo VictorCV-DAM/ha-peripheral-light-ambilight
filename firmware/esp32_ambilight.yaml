@@ -396,10 +396,17 @@ interval:
           int maxOverall = std::max({izqR, izqG, izqB, supR, supG, supB, derR, derG, derB, cenR, cenG, cenB});
           bool isBlack = (maxOverall <= 4);
 
-          // Dispersión cromática normalizada (inmune a caídas de brillo / pérdida de MSB 128 por falta de GND):
-          // En modo Estático todos los bordes encendidos comparten exactamente la misma proporción de color RGB
-          // aunque un borde lea menor amplitud (ej. 125,0,125 vs 85,0,84 vs 41,0,37 -> chromaSpread <= 28).
-          // En modo Vídeo la cámara capta colores distintos en cada borde de la TV (chromaSpread >= 54..380).
+          // Dispersión cromática y espacial:
+          // 1. rawSpread: diferencia directa de brillo y color entre bordes (milestone da7c289).
+          int maxR = std::max({izqR, supR, derR, cenR});
+          int minR = std::min({izqR, supR, derR, cenR});
+          int maxG = std::max({izqG, supG, derG, cenG});
+          int minG = std::min({izqG, supG, derG, cenG});
+          int maxB = std::max({izqB, supB, derB, cenB});
+          int minB = std::min({izqB, supB, derB, cenB});
+          int rawSpread = (maxR - minR) + (maxG - minG) + (maxB - minB);
+
+          // 2. chromaSpread: proporción cromática normalizada a 255.
           int normR[4], normG[4], normB[4];
           int validZones = 0;
           int zR[4] = {izqR, supR, derR, cenR};
@@ -427,7 +434,7 @@ interval:
             chromaSpread = (maxNR - minNR) + (maxNG - minNG) + (maxNB - minNB);
           }
 
-          int totalSpread = chromaSpread;
+          int totalSpread = std::max(rawSpread, chromaSpread);
 
           static int prevRawIzqR = -1, prevRawIzqG = -1, prevRawIzqB = -1;
           static int prevRawDerR = -1, prevRawDerG = -1, prevRawDerB = -1;
@@ -463,16 +470,17 @@ interval:
             else consecutiveStaticFrames = 0;
           } else {
             // Modo Vídeo Real (Ambilight) vs Modo Lámpara / Estático:
-            // 1. En lámpara / estático: todos los bordes comparten la misma proporción de color (chromaSpread < 30).
-            // 2. En vídeo: contraste cromático real entre cualquier borde (chromaSpread >= 50),
-            //    o movimiento dinámico en la imagen (tempDelta >= 25 y chromaSpread >= 25).
-            bool isRealVideo = (chromaSpread >= 50 || (chromaSpread >= 25 && tempDelta >= 25));
+            // 1. En lámpara / estático: el color es homogéneo en el perímetro (totalSpread < 35)
+            //    Y los LEDs NO se mueven en el tiempo (tempDelta < 15).
+            // 2. En vídeo: contraste entre bordes (totalSpread >= 40 o chromaSpread >= 40),
+            //    O dinamismo / movimiento temporal de imagen continua (tempDelta >= 15).
+            bool isRealVideo = (totalSpread >= 40 || chromaSpread >= 40 || tempDelta >= 15);
             if (isRealVideo) {
               consecutiveVideoFrames++;
               if (consecutiveStaticFrames > 1) consecutiveStaticFrames -= 2;
               else consecutiveStaticFrames = 0;
             } else {
-              // Modo Lámpara / Color fijo
+              // Modo Lámpara / Color fijo (inmóvil e idéntico en todo el perímetro)
               consecutiveStaticFrames++;
               if (consecutiveVideoFrames > 1) consecutiveVideoFrames -= 2;
               else consecutiveVideoFrames = 0;
@@ -480,8 +488,8 @@ interval:
           }
 
           // Evitar desbordamiento de contadores:
-          consecutiveVideoFrames = std::min(consecutiveVideoFrames, 60);
-          consecutiveStaticFrames = std::min(consecutiveStaticFrames, 60);
+          consecutiveVideoFrames = std::min(consecutiveVideoFrames, 80);
+          consecutiveStaticFrames = std::min(consecutiveStaticFrames, 80);
           consecutiveBlackFrames = std::min(consecutiveBlackFrames, 50);
 
           std::string targetCandidate = currentMode;
@@ -500,8 +508,8 @@ interval:
             if (consecutiveBlackFrames >= 30) {
               // Pantalla/tira apagada en negro durante ~1.2s -> Standby
               targetCandidate = "Standby";
-            } else if (consecutiveVideoFrames >= 12) {
-              // Conmuta a Vídeo en ~480ms de vídeo real contrastado
+            } else if (consecutiveVideoFrames >= 15) {
+              // Conmuta a Vídeo en ~600ms de vídeo real
               targetCandidate = "Vídeo";
             }
           } else if (currentMode == "Vídeo") {
@@ -509,11 +517,9 @@ interval:
             if (consecutiveBlackFrames >= 30) {
               // ~1.2s de negro absoluto sostenido -> Standby
               targetCandidate = "Standby";
-            } else if (consecutiveStaticFrames >= 35) {
-              // Histeresis robusta contra rebotes: exige ~1.4s (35 frames continuos)
-              // de lámpara uniforme fija para conmutar de Vídeo a Estático.
-              // En vídeo una escena puede tener 300-800ms de color homogéneo (un plano de cielo, etc.)
-              // sin que deba rebotar a Estático jamás.
+            } else if (consecutiveStaticFrames >= 45) {
+              // Exige ~1.8s (45 frames) continuos de lámpara fija inmóvil (spread<40 y delta<15)
+              // para conmutar de Vídeo a Estático. Esto hace matemáticamente IMPOSIBLE el rebote en vídeo.
               targetCandidate = "Estático";
             }
           }
