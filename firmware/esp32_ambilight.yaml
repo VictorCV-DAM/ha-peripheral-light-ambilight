@@ -287,6 +287,7 @@ interval:
           static std::string currentMode = "Standby";
           static int consecutiveVideoFrames = 0;
           static int consecutiveStaticFrames = 0;
+          static int consecutiveStrongVideoFrames = 0;
 
           uint32_t now = millis();
           uint32_t tLoopStart = now;
@@ -484,14 +485,23 @@ interval:
             if (consecutiveVideoFrames > 0) consecutiveVideoFrames--;
             if (consecutiveStaticFrames > 0) consecutiveStaticFrames--;
           } else {
-            // Modo Vídeo Real (Ambilight) vs Modo Lámpara / Estático:
-            // 1. En lámpara / estático: el color es totalmente estático e inmóvil en el tiempo (tempDelta == 0).
-            // 2. En vídeo:
-            //    a) Modo multizona (Part): contraste espacial entre bordes (totalSpread >= 12 o chromaSpread >= 12).
-            //    b) Modo escena homogénea o todo-en-uno (All): dinamismo temporal de vídeo (tempDelta >= 6).
-            //    c) Cambio moderado continuo (totalSpread >= 6 && tempDelta >= 3).
-            bool isRealVideo = (totalSpread >= 12 || chromaSpread >= 12 || tempDelta >= 6 || (totalSpread >= 6 && tempDelta >= 3));
-            if (isRealVideo) {
+            // Detección de Dinamismo y Dispersión:
+            // 1. isStrongVideo: Evidencia inequívoca de vídeo multizona o cambio dinámico real en la TV.
+            //    Imposible de generar por ruido eléctrico en un cable único sin masa común.
+            bool isStrongVideo = (totalSpread >= 26 || chromaSpread >= 22 || (totalSpread >= 12 && tempDelta >= 25));
+
+            // 2. isVideoActivity: Sensibilidad continua para retener el modo Vídeo una vez activo
+            //    (incluso en escenas de cine con fondos planos o transiciones suaves).
+            bool isVideoActivity = (isStrongVideo || totalSpread >= 12 || chromaSpread >= 12 || tempDelta >= 6 || (totalSpread >= 6 && tempDelta >= 3));
+
+            if (isStrongVideo) {
+              consecutiveStrongVideoFrames++;
+            } else {
+              if (consecutiveStrongVideoFrames > 0) consecutiveStrongVideoFrames--;
+            }
+            consecutiveStrongVideoFrames = std::min(consecutiveStrongVideoFrames, 50);
+
+            if (isVideoActivity) {
               consecutiveVideoFrames++;
               // Inmunidad a glitches de cable único sin GND:
               // Un glitch aislado de 1 frame solo resta 4 a sF y se recupera de inmediato.
@@ -520,7 +530,7 @@ interval:
           if (currentMode == "Standby") {
             // Salida instantánea de Standby al detectar luz/señal continua (>20 frames encendidos ~800ms):
             if (!isBlack && consecutiveAwakeFrames >= 20) {
-              if (consecutiveVideoFrames >= 6) {
+              if (consecutiveStrongVideoFrames >= 8 || consecutiveVideoFrames >= 15) {
                 targetCandidate = "Vídeo";
               } else {
                 targetCandidate = "Estático";
@@ -531,8 +541,11 @@ interval:
             if (consecutiveBlackFrames >= 30) {
               // Pantalla/tira apagada en negro durante ~1.2s -> Standby
               targetCandidate = "Standby";
-            } else if (consecutiveVideoFrames >= 8) {
-              // Con ~320ms (8 frames) de vídeo dinámico conmuta a Vídeo con solidez y rapidez.
+            } else if (consecutiveStrongVideoFrames >= 10 || consecutiveVideoFrames >= 35) {
+              // Para salir de Estático e ir a Vídeo, se EXIGE evidencia sólida de vídeo real:
+              // - 10 frames (~400ms) de contraste espacial entre zonas de la TV (totalSpread>=26) o dinamismo real,
+              // - O 35 frames (~1.4s) continuos de actividad de vídeo sostenida.
+              // El ruido de masa flotante en estático (spread=0, dt puntual) NUNCA activa esto.
               targetCandidate = "Vídeo";
             }
           } else if (currentMode == "Vídeo") {
