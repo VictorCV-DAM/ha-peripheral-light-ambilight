@@ -437,11 +437,15 @@ interval:
           int totalSpread = std::max(rawSpread, chromaSpread);
 
           static int prevRawIzqR = -1, prevRawIzqG = -1, prevRawIzqB = -1;
+          static int prevRawSupR = -1, prevRawSupG = -1, prevRawSupB = -1;
           static int prevRawDerR = -1, prevRawDerG = -1, prevRawDerB = -1;
+          static int prevRawCenR = -1, prevRawCenG = -1, prevRawCenB = -1;
 
           int tempDelta = (prevRawIzqR < 0) ? 0 :
                           (abs(izqR - prevRawIzqR) + abs(izqG - prevRawIzqG) + abs(izqB - prevRawIzqB) +
-                           abs(derR - prevRawDerR) + abs(derG - prevRawDerG) + abs(derB - prevRawDerB));
+                           abs(supR - prevRawSupR) + abs(supG - prevRawSupG) + abs(supB - prevRawSupB) +
+                           abs(derR - prevRawDerR) + abs(derG - prevRawDerG) + abs(derB - prevRawDerB) +
+                           abs(cenR - prevRawCenR) + abs(cenG - prevRawCenG) + abs(cenB - prevRawCenB));
 
           // Detección y neutralización de micro-glitches de bus y micro-cortes de 50Hz sin GND:
           static int consecutiveBlackFrames = 0;
@@ -457,7 +461,9 @@ interval:
 
           if (!isBlack) {
             prevRawIzqR = izqR; prevRawIzqG = izqG; prevRawIzqB = izqB;
+            prevRawSupR = supR; prevRawSupG = supG; prevRawSupB = supB;
             prevRawDerR = derR; prevRawDerG = derG; prevRawDerB = derB;
+            prevRawCenR = cenR; prevRawCenG = cenG; prevRawCenB = cenB;
           }
 
           // Salida de Standby por señal activa sostenida (>300ms de datos válidos no-negro):
@@ -470,6 +476,8 @@ interval:
           consecutiveAwakeFrames = std::min(consecutiveAwakeFrames, 100);
 
           // Integrador Leaky-Bucket Asimétrico con límites de saturación:
+          static uint32_t lastVideoActivityTime = 0;
+
           if (isTransientBlackDrop) {
             // Ignorar micro-corte de 1..3 frames sin destruir sF ni vF
           } else if (isBlack) {
@@ -479,23 +487,26 @@ interval:
             // Modo Vídeo Real (Ambilight) vs Modo Lámpara / Estático:
             // 1. En lámpara / estático: el color es totalmente estático e inmóvil en el tiempo (tempDelta == 0).
             // 2. En vídeo:
-            //    a) Modo multizona (Part): contraste espacial entre bordes (totalSpread >= 20 o chromaSpread >= 20).
-            //    b) Modo escena homogénea o todo-en-uno (All): dinamismo temporal de vídeo (tempDelta >= 15).
-            //    c) Cambio moderado continuo (totalSpread >= 10 && tempDelta >= 10).
-            bool isRealVideo = (totalSpread >= 20 || chromaSpread >= 20 || tempDelta >= 15 || (totalSpread >= 10 && tempDelta >= 10));
+            //    a) Modo multizona (Part): contraste espacial entre bordes (totalSpread >= 12 o chromaSpread >= 12).
+            //    b) Modo escena homogénea o todo-en-uno (All): dinamismo temporal de vídeo (tempDelta >= 6).
+            //    c) Cambio moderado continuo (totalSpread >= 6 && tempDelta >= 3).
+            bool isRealVideo = (totalSpread >= 12 || chromaSpread >= 12 || tempDelta >= 6 || (totalSpread >= 6 && tempDelta >= 3));
             if (isRealVideo) {
               consecutiveVideoFrames++;
-              if (consecutiveStaticFrames > 0) consecutiveStaticFrames--;
+              consecutiveStaticFrames = 0; // HARD RESET: cualquier dinamismo de vídeo borra de raíz el contador estático
+              lastVideoActivityTime = now;
             } else {
               // Modo Lámpara / Color fijo (inmóvil e idéntico en todo el perímetro)
               consecutiveStaticFrames++;
-              if (consecutiveVideoFrames > 0) consecutiveVideoFrames--;
+              if (consecutiveStaticFrames > 10 && consecutiveVideoFrames > 0) {
+                consecutiveVideoFrames--;
+              }
             }
           }
 
           // Evitar desbordamiento de contadores:
           consecutiveVideoFrames = std::min(consecutiveVideoFrames, 80);
-          consecutiveStaticFrames = std::min(consecutiveStaticFrames, 80);
+          consecutiveStaticFrames = std::min(consecutiveStaticFrames, 150);
           consecutiveBlackFrames = std::min(consecutiveBlackFrames, 50);
 
           std::string targetCandidate = currentMode;
@@ -503,7 +514,7 @@ interval:
           if (currentMode == "Standby") {
             // Salida instantánea de Standby al detectar luz/señal continua (>20 frames encendidos ~800ms):
             if (!isBlack && consecutiveAwakeFrames >= 20) {
-              if (consecutiveVideoFrames >= 8) {
+              if (consecutiveVideoFrames >= 6) {
                 targetCandidate = "Vídeo";
               } else {
                 targetCandidate = "Estático";
@@ -514,8 +525,8 @@ interval:
             if (consecutiveBlackFrames >= 30) {
               // Pantalla/tira apagada en negro durante ~1.2s -> Standby
               targetCandidate = "Standby";
-            } else if (consecutiveVideoFrames >= 14) {
-              // Con ~560ms (14 frames) de vídeo dinámico conmuta a Vídeo con solidez y rapidez.
+            } else if (consecutiveVideoFrames >= 8) {
+              // Con ~320ms (8 frames) de vídeo dinámico conmuta a Vídeo con solidez y rapidez.
               targetCandidate = "Vídeo";
             }
           } else if (currentMode == "Vídeo") {
@@ -523,10 +534,9 @@ interval:
             if (consecutiveBlackFrames >= 30) {
               // ~1.2s de negro absoluto sostenido -> Standby
               targetCandidate = "Standby";
-            } else if (consecutiveStaticFrames >= 70) {
-              // Exige ~2.8s (70 frames) continuos e ininterrumpidos de lámpara fija inmóvil (spread<10 y delta<10)
-              // para abandonar Vídeo. En cine/vídeo normal, las escenas con pausas o fondos planos duran 1..2s.
-              // Con 70 frames nunca se degrada a Estático durante una película o vídeo.
+            } else if (consecutiveStaticFrames >= 90 && (now - lastVideoActivityTime >= 3500)) {
+              // Exige ~3.6s (90 frames) CONTINUOS e ININTERRUMPIDOS de estatismo absoluto sin un solo cambio
+              // para abandonar Vídeo hacia Estático (lámpara fija).
               targetCandidate = "Estático";
             }
           }
