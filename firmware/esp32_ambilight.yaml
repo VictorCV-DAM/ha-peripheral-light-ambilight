@@ -493,12 +493,18 @@ interval:
             bool isRealVideo = (totalSpread >= 12 || chromaSpread >= 12 || tempDelta >= 6 || (totalSpread >= 6 && tempDelta >= 3));
             if (isRealVideo) {
               consecutiveVideoFrames++;
-              consecutiveStaticFrames = 0; // HARD RESET: cualquier dinamismo de vídeo borra de raíz el contador estático
-              lastVideoActivityTime = now;
+              // Inmunidad a glitches de cable único sin GND:
+              // Un glitch aislado de 1 frame solo resta 4 a sF y se recupera de inmediato.
+              // En vídeo real continuo (20-25 frames/s), sF queda implacablemente aplastado en 0.
+              consecutiveStaticFrames = (consecutiveStaticFrames > 4) ? (consecutiveStaticFrames - 4) : 0;
+              if (consecutiveVideoFrames >= 3) {
+                // Solo si el dinamismo dura >= 3 frames (~120ms) se confirma actividad de vídeo real
+                lastVideoActivityTime = now;
+              }
             } else {
               // Modo Lámpara / Color fijo (inmóvil e idéntico en todo el perímetro)
               consecutiveStaticFrames++;
-              if (consecutiveStaticFrames > 10 && consecutiveVideoFrames > 0) {
+              if (consecutiveStaticFrames > 5 && consecutiveVideoFrames > 0) {
                 consecutiveVideoFrames--;
               }
             }
@@ -534,9 +540,8 @@ interval:
             if (consecutiveBlackFrames >= 30) {
               // ~1.2s de negro absoluto sostenido -> Standby
               targetCandidate = "Standby";
-            } else if (consecutiveStaticFrames >= 90 && (now - lastVideoActivityTime >= 3500)) {
-              // Exige ~3.6s (90 frames) CONTINUOS e ININTERRUMPIDOS de estatismo absoluto sin un solo cambio
-              // para abandonar Vídeo hacia Estático (lámpara fija).
+            } else if (consecutiveStaticFrames >= 70 && (now - lastVideoActivityTime >= 2800)) {
+              // Exige ~2.8s (70 frames) de predominancia estática sin vídeo genuino para pasar a Lámpara fija
               targetCandidate = "Estático";
             }
           }
