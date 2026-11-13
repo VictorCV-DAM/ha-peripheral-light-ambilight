@@ -415,16 +415,7 @@ interval:
             }
           }
           int chromaSpread = 0;
-          if (validZones == 4) {
-            std::sort(normR, normR + 4);
-            std::sort(normG, normG + 4);
-            std::sort(normB, normB + 4);
-            // Dispersión por consenso de 3 zonas (descarta 1 borde extremo si sufre bit-slip al final de la tira sin GND)
-            int spR = std::min(normR[3] - normR[1], normR[2] - normR[0]);
-            int spG = std::min(normG[3] - normG[1], normG[2] - normG[0]);
-            int spB = std::min(normB[3] - normB[1], normB[2] - normB[0]);
-            chromaSpread = spR + spG + spB;
-          } else if (validZones >= 2) {
+          if (validZones >= 2) {
             int maxNR = normR[0], minNR = normR[0];
             int maxNG = normG[0], minNG = normG[0];
             int maxNB = normB[0], minNB = normB[0];
@@ -472,17 +463,16 @@ interval:
             else consecutiveStaticFrames = 0;
           } else {
             // Modo Vídeo Real (Ambilight) vs Modo Lámpara / Estático:
-            // Para ser vídeo real se requiere dispersión cromática contrastada (chromaSpread >= 65),
-            // o dispersión moderada con movimiento dinámico entre fotogramas (chromaSpread >= 45 && tempDelta >= 25).
-            // En estático, los glitches eléctricos de un cable sin GND pueden dar picos aislados de spread,
-            // pero nunca cromatismo continuo entre las 4 zonas.
-            bool isRealVideo = (chromaSpread >= 65 || (chromaSpread >= 45 && tempDelta >= 25));
+            // 1. En lámpara / estático: todos los bordes comparten la misma proporción de color (chromaSpread < 30).
+            // 2. En vídeo: contraste cromático real entre cualquier borde (chromaSpread >= 50),
+            //    o movimiento dinámico en la imagen (tempDelta >= 25 y chromaSpread >= 25).
+            bool isRealVideo = (chromaSpread >= 50 || (chromaSpread >= 25 && tempDelta >= 25));
             if (isRealVideo) {
               consecutiveVideoFrames++;
               if (consecutiveStaticFrames > 1) consecutiveStaticFrames -= 2;
               else consecutiveStaticFrames = 0;
             } else {
-              // Modo Lámpara / Color fijo (incluso cambiando de color o con caída de tensión)
+              // Modo Lámpara / Color fijo
               consecutiveStaticFrames++;
               if (consecutiveVideoFrames > 1) consecutiveVideoFrames -= 2;
               else consecutiveVideoFrames = 0;
@@ -490,8 +480,8 @@ interval:
           }
 
           // Evitar desbordamiento de contadores:
-          consecutiveVideoFrames = std::min(consecutiveVideoFrames, 35);
-          consecutiveStaticFrames = std::min(consecutiveStaticFrames, 35);
+          consecutiveVideoFrames = std::min(consecutiveVideoFrames, 60);
+          consecutiveStaticFrames = std::min(consecutiveStaticFrames, 60);
           consecutiveBlackFrames = std::min(consecutiveBlackFrames, 50);
 
           std::string targetCandidate = currentMode;
@@ -510,9 +500,8 @@ interval:
             if (consecutiveBlackFrames >= 30) {
               // Pantalla/tira apagada en negro durante ~1.2s -> Standby
               targetCandidate = "Standby";
-            } else if (consecutiveVideoFrames >= 16) {
-              // Requiere ~640ms de vídeo sostenido real (16 frames) para pasar de Estático a Vídeo.
-              // Esto elimina al 100% los micro-glitches de ruido que duran 2-4 frames en cable sin masa.
+            } else if (consecutiveVideoFrames >= 12) {
+              // Conmuta a Vídeo en ~480ms de vídeo real contrastado
               targetCandidate = "Vídeo";
             }
           } else if (currentMode == "Vídeo") {
@@ -520,8 +509,11 @@ interval:
             if (consecutiveBlackFrames >= 30) {
               // ~1.2s de negro absoluto sostenido -> Standby
               targetCandidate = "Standby";
-            } else if (consecutiveStaticFrames >= 8) {
-              // Conmuta de vuelta a Estático rápidamente (~320ms) en cuanto la luz se fija uniforme
+            } else if (consecutiveStaticFrames >= 35) {
+              // Histeresis robusta contra rebotes: exige ~1.4s (35 frames continuos)
+              // de lámpara uniforme fija para conmutar de Vídeo a Estático.
+              // En vídeo una escena puede tener 300-800ms de color homogéneo (un plano de cielo, etc.)
+              // sin que deba rebotar a Estático jamás.
               targetCandidate = "Estático";
             }
           }
