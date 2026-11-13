@@ -415,7 +415,16 @@ interval:
             }
           }
           int chromaSpread = 0;
-          if (validZones >= 2) {
+          if (validZones == 4) {
+            std::sort(normR, normR + 4);
+            std::sort(normG, normG + 4);
+            std::sort(normB, normB + 4);
+            // Dispersión por consenso de 3 zonas (descarta 1 borde extremo si sufre bit-slip al final de la tira sin GND)
+            int spR = std::min(normR[3] - normR[1], normR[2] - normR[0]);
+            int spG = std::min(normG[3] - normG[1], normG[2] - normG[0]);
+            int spB = std::min(normB[3] - normB[1], normB[2] - normB[0]);
+            chromaSpread = spR + spG + spB;
+          } else if (validZones >= 2) {
             int maxNR = normR[0], minNR = normR[0];
             int maxNG = normG[0], minNG = normG[0];
             int maxNB = normB[0], minNB = normB[0];

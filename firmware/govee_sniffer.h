@@ -2,7 +2,6 @@
 #include "esp_attr.h"
 #include "esp_cpu.h"
 #include "esp_log.h"
-#include "esp_rom_sys.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/portmacro.h"
 #include <stdint.h>
@@ -13,15 +12,14 @@
 static portMUX_TYPE goveeMutex = portMUX_INITIALIZER_UNLOCKED;
 
 // Decodificador WS2811 de Ultra-Precision para Govee T1 (H6199) - 37 LEDs (912/888 bits)
-// Basado fielmente en el HITO da7c289 con ventana de respiracion WiFi verificada por silencio de 3us
 IRAM_ATTR inline int capture_govee_frame(uint8_t *ledData, int maxLeds) {
     uint32_t tStart = esp_cpu_get_cycle_count();
 
     // 1. Detectar el silencio de reset WS2811 (linea en BAJO continuo durante > 60us = 9600 ciclos)
     bool resetDetected = false;
-    while (esp_cpu_get_cycle_count() - tStart < 1600000) { // 10ms max
+    while (esp_cpu_get_cycle_count() - tStart < 6400000) { // 40ms max
         while (*GOVEE_GPIO_IN & GOVEE_PIN_MASK) {
-            if (esp_cpu_get_cycle_count() - tStart > 1600000) return 0;
+            if (esp_cpu_get_cycle_count() - tStart > 6400000) return 0;
         }
         uint32_t tLow = esp_cpu_get_cycle_count();
         while (!(*GOVEE_GPIO_IN & GOVEE_PIN_MASK)) {
@@ -35,35 +33,17 @@ IRAM_ATTR inline int capture_govee_frame(uint8_t *ledData, int maxLeds) {
 
     if (!resetDetected) return 0;
 
-    // 2. Entrar en seccion critica ANTES del flanco (exactamente como en el HITO da7c289)
+    // 2. Entrar en seccion critica: desactiva interrupciones durante la transmision de ~1.1ms
     taskENTER_CRITICAL(&goveeMutex);
 
     // 3. Esperar al flanco de subida del primer bit con filtro antirruido
     uint32_t tRise = 0;
     uint32_t tWaitFirst = esp_cpu_get_cycle_count();
-    uint32_t tSlice = tWaitFirst;
     while (1) {
         while (!(*GOVEE_GPIO_IN & GOVEE_PIN_MASK)) {
-            uint32_t cNow = esp_cpu_get_cycle_count();
-            if (cNow - tWaitFirst > 1600000) { // 10ms timeout total
+            if (esp_cpu_get_cycle_count() - tWaitFirst > 1600000) { // 10ms timeout
                 taskEXIT_CRITICAL(&goveeMutex);
                 return 0;
-            }
-            if (cNow - tSlice > 240000) { // Cada 1.5ms en BAJO: abrir ventana de 15us para WiFi
-                taskEXIT_CRITICAL(&goveeMutex);
-                esp_rom_delay_us(15);
-                taskENTER_CRITICAL(&goveeMutex);
-                // Verificar 3us (480 ciclos) continuos en BAJO tras reentrar.
-                // Como WS2811 emite un pulso ALTO cada 1.25us (200 ciclos), 3us continuos en BAJO
-                // garantiza al 100% que NO ha empezado ninguna trama durante la ventana de 15us.
-                uint32_t tVerifyLow = esp_cpu_get_cycle_count();
-                while (esp_cpu_get_cycle_count() - tVerifyLow < 480) {
-                    if (*GOVEE_GPIO_IN & GOVEE_PIN_MASK) {
-                        taskEXIT_CRITICAL(&goveeMutex);
-                        return 0;
-                    }
-                }
-                tSlice = esp_cpu_get_cycle_count();
             }
         }
         tRise = esp_cpu_get_cycle_count();
@@ -73,7 +53,7 @@ IRAM_ATTR inline int capture_govee_frame(uint8_t *ledData, int maxLeds) {
         }
     }
 
-    // 5. Muestreo WS2811 por punto medio (530ns tras flanco) - 100% identico al HITO da7c289
+    // 5. Muestreo WS2811 por punto medio (530ns tras flanco)
     int ledsRead = 0;
     bool frameDone = false;
 
@@ -100,7 +80,7 @@ IRAM_ATTR inline int capture_govee_frame(uint8_t *ledData, int maxLeds) {
                     if (frameDone) break;
                 }
 
-                // Punto medio del bit (85 ciclos = ~530ns) - 100% identico al HITO da7c289
+                // Punto medio del bit (85 ciclos = ~530ns)
                 while (esp_cpu_get_cycle_count() - tRise < 85);
 
                 // Muestrear valor
