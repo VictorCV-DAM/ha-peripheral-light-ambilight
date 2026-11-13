@@ -509,8 +509,10 @@ interval:
             if (consecutiveBlackFrames >= 30) {
               // Pantalla/tira apagada en negro durante ~1.2s -> Standby
               targetCandidate = "Standby";
-            } else if (consecutiveVideoFrames >= 15) {
-              // Conmuta a Vídeo en ~600ms de vídeo real
+            } else if (consecutiveVideoFrames >= 45) {
+              // Requiere ~1.8s (45 frames) ininterrumpidos de vídeo dinámico real para conmutar a Vídeo.
+              // Con un cable único sin masa GND común, las ráfagas parásitas inducidas de 50Hz duran a lo sumo 10-15 frames.
+              // 45 frames garantiza inmunidad matemática absoluta a cualquier ruido de bus sin GND.
               targetCandidate = "Vídeo";
             }
           } else if (currentMode == "Vídeo") {
