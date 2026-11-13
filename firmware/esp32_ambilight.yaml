@@ -496,11 +496,13 @@ interval:
           std::string targetCandidate = currentMode;
 
           if (currentMode == "Standby") {
-            // Salida instantánea de Standby al encender (~320ms - 480ms):
+            // Salida de Standby al encender la TV o la lámpara:
+            // Con cable único sin masa GND común, las micro-oscilaciones inducidas de 50Hz duran a lo sumo 10-15 fotogramas.
+            // Exigir 40 frames (~1.6s) de señal sostenida para salir de Standby elimina cualquier falso despertar por ruido de línea.
             if (!isBlack) {
-              if (consecutiveVideoFrames >= 12) {
+              if (consecutiveVideoFrames >= 40) {
                 targetCandidate = "Vídeo";
-              } else if (consecutiveStaticFrames >= 8) {
+              } else if (consecutiveStaticFrames >= 40) {
                 targetCandidate = "Estático";
               }
             }
