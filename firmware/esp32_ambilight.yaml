@@ -436,19 +436,28 @@ interval:
                           (abs(izqR - prevRawIzqR) + abs(izqG - prevRawIzqG) + abs(izqB - prevRawIzqB) +
                            abs(derR - prevRawDerR) + abs(derG - prevRawDerG) + abs(derB - prevRawDerB));
 
-          // Detección y neutralización de micro-glitches de bus:
-          bool isGlitch = (prevRawIzqR >= 0 && tempDelta > 120 && chromaSpread < 35);
+          // Detección y neutralización de micro-glitches de bus y micro-cortes de 50Hz sin GND:
+          static int consecutiveBlackFrames = 0;
+          if (isBlack) {
+            consecutiveBlackFrames++;
+          } else {
+            consecutiveBlackFrames = 0;
+          }
 
-          if (!isGlitch) {
+          // Si veníamos con señal encendida y cae a 0 durante solo 1..3 fotogramas (<160ms),
+          // es un micro-corte por oscilación de masa flotante (dt=512), NO un apagado real.
+          bool isTransientBlackDrop = (isBlack && consecutiveBlackFrames <= 3 && prevRawIzqR >= 0);
+          bool isGlitch = isTransientBlackDrop || (prevRawIzqR >= 0 && tempDelta > 120 && chromaSpread < 35);
+
+          if (!isGlitch && !isBlack) {
             prevRawIzqR = izqR; prevRawIzqG = izqG; prevRawIzqB = izqB;
             prevRawDerR = derR; prevRawDerG = derG; prevRawDerB = derB;
           }
 
           // Integrador Leaky-Bucket Asimétrico con límites de saturación:
-          static int consecutiveBlackFrames = 0;
-
-          if (isBlack) {
-            consecutiveBlackFrames++;
+          if (isTransientBlackDrop) {
+            // Ignorar micro-corte de 1..3 frames sin destruir sF ni vF
+          } else if (isBlack) {
             if (consecutiveVideoFrames > 1) consecutiveVideoFrames -= 2;
             else consecutiveVideoFrames = 0;
             if (consecutiveStaticFrames > 1) consecutiveStaticFrames -= 2;
@@ -456,7 +465,6 @@ interval:
           } else if (isGlitch) {
             // Glitch eléctrico aislado: ignorar sin alterar contadores
           } else {
-            consecutiveBlackFrames = 0;
             bool isRealVideo = (chromaSpread >= 48 || (chromaSpread >= 32 && tempDelta >= 20));
             if (isRealVideo) {
               consecutiveVideoFrames++;
@@ -543,6 +551,9 @@ interval:
 
           // Suavizado temporal IIR (75/25): elimina el parpadeo de +-10 del sensor de cámara en estático
           // pero responde en el primer fotograma (40ms) ante cambios reales de escena.
+          if (isTransientBlackDrop) {
+            return;
+          }
           if (fIzqR < 0) {
             fIzqR = izqR; fIzqG = izqG; fIzqB = izqB;
             fSupR = supR; fSupG = supG; fSupB = supB;
