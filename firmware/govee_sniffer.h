@@ -2,6 +2,7 @@
 #include "esp_attr.h"
 #include "esp_cpu.h"
 #include "esp_log.h"
+#include "esp_rom_sys.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/portmacro.h"
 #include <stdint.h>
@@ -9,8 +10,10 @@
 #define GOVEE_PIN_MASK 0x08 // GPIO3
 #define GOVEE_GPIO_IN ((volatile uint32_t *)0x6000403C)
 
-// Decodificador WS2811 de Ultra-Precision para Govee T1 (H6199) - 37 LEDs (888 bits)
-// Espera 100% libre de bloqueos para WiFi + bloqueo de interrupciones en 1 ciclo RISC-V (6.25ns) en el flanco
+static portMUX_TYPE goveeMutex = portMUX_INITIALIZER_UNLOCKED;
+
+// Decodificador WS2811 de Ultra-Precision para Govee T1 (H6199) - 37 LEDs (912/888 bits)
+// Basado fielmente en el HITO da7c289 con ventana de respiracion WiFi verificada por silencio de 3us
 IRAM_ATTR inline int capture_govee_frame(uint8_t *ledData, int maxLeds) {
     uint32_t tStart = esp_cpu_get_cycle_count();
 
@@ -32,42 +35,45 @@ IRAM_ATTR inline int capture_govee_frame(uint8_t *ledData, int maxLeds) {
 
     if (!resetDetected) return 0;
 
-    // 2. Esperar al flanco de subida del primer bit con interrupciones HABILITADAS (WiFi 100% libre).
-    // Al detectar ALTO, deshabilitamos interrupciones en 1 solo ciclo de reloj RISC-V (csrrci mstatus, 8 = 6.25ns),
-    // evitando las ~200+ ciclos de sobrecarga de taskENTER_CRITICAL que desplazaban el Bit 7 del LED 0.
+    // 2. Entrar en seccion critica ANTES del flanco (exactamente como en el HITO da7c289)
+    taskENTER_CRITICAL(&goveeMutex);
+
+    // 3. Esperar al flanco de subida del primer bit con filtro antirruido
     uint32_t tRise = 0;
-    uint32_t mstatus = 0;
     uint32_t tWaitFirst = esp_cpu_get_cycle_count();
+    uint32_t tSlice = tWaitFirst;
     while (1) {
-        uint32_t tLastLow = esp_cpu_get_cycle_count();
         while (!(*GOVEE_GPIO_IN & GOVEE_PIN_MASK)) {
-            tLastLow = esp_cpu_get_cycle_count();
-            if (tLastLow - tWaitFirst > 1600000) { // 10ms timeout
+            uint32_t cNow = esp_cpu_get_cycle_count();
+            if (cNow - tWaitFirst > 1600000) { // 10ms timeout total
+                taskEXIT_CRITICAL(&goveeMutex);
                 return 0;
+            }
+            if (cNow - tSlice > 240000) { // Cada 1.5ms en BAJO: abrir ventana de 15us para WiFi
+                taskEXIT_CRITICAL(&goveeMutex);
+                esp_rom_delay_us(15);
+                taskENTER_CRITICAL(&goveeMutex);
+                // Verificar 3us (480 ciclos) continuos en BAJO tras reentrar.
+                // Como WS2811 emite un pulso ALTO cada 1.25us (200 ciclos), 3us continuos en BAJO
+                // garantiza al 100% que NO ha empezado ninguna trama durante la ventana de 15us.
+                uint32_t tVerifyLow = esp_cpu_get_cycle_count();
+                while (esp_cpu_get_cycle_count() - tVerifyLow < 480) {
+                    if (*GOVEE_GPIO_IN & GOVEE_PIN_MASK) {
+                        taskEXIT_CRITICAL(&goveeMutex);
+                        return 0;
+                    }
+                }
+                tSlice = esp_cpu_get_cycle_count();
             }
         }
         tRise = esp_cpu_get_cycle_count();
-        // Deshabilitar interrupciones globalmente en la CPU RISC-V en 1 ciclo (6.25ns):
-        __asm__ __volatile__("csrrci %0, mstatus, 8" : "=r"(mstatus) : : "memory");
-
-        // Si una interrupcion de WiFi retraso la deteccion del flanco (> 200ns = 32 ciclos),
-        // abortamos este intento para jamas leer una trama desplazada:
-        if (tRise - tLastLow > 32) {
-            __asm__ __volatile__("csrw mstatus, %0" : : "r"(mstatus) : "memory");
-            return 0;
-        }
-
-        // Filtro antirruido de 125ns (20 ciclos) ya con interrupciones desactivadas:
-        while (esp_cpu_get_cycle_count() - tRise < 20);
+        while (esp_cpu_get_cycle_count() - tRise < 20); // 125ns glitch filter
         if (*GOVEE_GPIO_IN & GOVEE_PIN_MASK) {
-            break; // Pulso valido confirmado: Bit 7 de LED 0 en ciclo 20
+            break; // Pulso valido: Bit 7 de LED 0
         }
-
-        // Era un micro-pico de ruido (< 125ns) en el cable sin masa: restaurar interrupciones y seguir esperando
-        __asm__ __volatile__("csrw mstatus, %0" : : "r"(mstatus) : "memory");
     }
 
-    // 3. Muestreo WS2811 por punto medio (530ns tras flanco) - identico al HITO da7c289
+    // 5. Muestreo WS2811 por punto medio (530ns tras flanco) - 100% identico al HITO da7c289
     int ledsRead = 0;
     bool frameDone = false;
 
@@ -119,7 +125,6 @@ IRAM_ATTR inline int capture_govee_frame(uint8_t *ledData, int maxLeds) {
         ledsRead++;
     }
 
-    // Restaurar interrupciones tras el 1.1ms de lectura de los 37 LEDs:
-    __asm__ __volatile__("csrw mstatus, %0" : : "r"(mstatus) : "memory");
+    taskEXIT_CRITICAL(&goveeMutex);
     return ledsRead;
 }

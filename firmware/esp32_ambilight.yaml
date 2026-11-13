@@ -7,15 +7,16 @@ esphome:
   on_boot:
     priority: -100
     then:
-      - delay: 1s
       - lambda: |-
           float val = id(velocidad_transicion).state;
           if (isnan(val)) val = 0.0f;
           float lat = 65.0f + (val * 1000.0f);
           id(latencia_estimada).publish_state(lat);
           id(latencia_media_registrada).publish_state(lat);
-          id(govee_signal_active).publish_state(false);
-          id(govee_hardware_state).publish_state("Standby");
+          if (!id(govee_hardware_state).has_state()) {
+            id(govee_signal_active).publish_state(false);
+            id(govee_hardware_state).publish_state("Standby");
+          }
 
 esp32:
   board: esp32-c3-devkitm-1
@@ -395,14 +396,38 @@ interval:
           int maxOverall = std::max({izqR, izqG, izqB, supR, supG, supB, derR, derG, derB, cenR, cenG, cenB});
           bool isBlack = (maxOverall <= 4);
 
-          int maxR = std::max({izqR, supR, derR, cenR});
-          int minR = std::min({izqR, supR, derR, cenR});
-          int maxG = std::max({izqG, supG, derG, cenG});
-          int minG = std::min({izqG, supG, derG, cenG});
-          int maxB = std::max({izqB, supB, derB, cenB});
-          int minB = std::min({izqB, supB, derB, cenB});
+          // Dispersión cromática normalizada (inmune a caídas de brillo / pérdida de MSB 128 por falta de GND):
+          // En modo Estático todos los bordes encendidos comparten exactamente la misma proporción de color RGB
+          // aunque un borde lea menor amplitud (ej. 125,0,125 vs 85,0,84 vs 41,0,37 -> chromaSpread <= 28).
+          // En modo Vídeo la cámara capta colores distintos en cada borde de la TV (chromaSpread >= 54..380).
+          int normR[4], normG[4], normB[4];
+          int validZones = 0;
+          int zR[4] = {izqR, supR, derR, cenR};
+          int zG[4] = {izqG, supG, derG, cenG};
+          int zB[4] = {izqB, supB, derB, cenB};
+          for (int z = 0; z < 4; z++) {
+            int m = std::max({zR[z], zG[z], zB[z]});
+            if (m >= 15) {
+              normR[validZones] = (zR[z] * 255) / m;
+              normG[validZones] = (zG[z] * 255) / m;
+              normB[validZones] = (zB[z] * 255) / m;
+              validZones++;
+            }
+          }
+          int chromaSpread = 0;
+          if (validZones >= 2) {
+            int maxNR = normR[0], minNR = normR[0];
+            int maxNG = normG[0], minNG = normG[0];
+            int maxNB = normB[0], minNB = normB[0];
+            for (int z = 1; z < validZones; z++) {
+              maxNR = std::max(maxNR, normR[z]); minNR = std::min(minNR, normR[z]);
+              maxNG = std::max(maxNG, normG[z]); minNG = std::min(minNG, normG[z]);
+              maxNB = std::max(maxNB, normB[z]); minNB = std::min(minNB, normB[z]);
+            }
+            chromaSpread = (maxNR - minNR) + (maxNG - minNG) + (maxNB - minNB);
+          }
 
-          int totalSpread = (maxR - minR) + (maxG - minG) + (maxB - minB);
+          int totalSpread = chromaSpread;
 
           static int prevRawIzqR = -1, prevRawIzqG = -1, prevRawIzqB = -1;
           static int prevRawDerR = -1, prevRawDerG = -1, prevRawDerB = -1;
@@ -412,9 +437,7 @@ interval:
                            abs(derR - prevRawDerR) + abs(derG - prevRawDerG) + abs(derB - prevRawDerB));
 
           // Detección y neutralización de micro-glitches de bus:
-          // Un salto anómalo (delta > 120) que no venga acompañado de una dispersión cromática real (spread >= 40)
-          // es un bit corrupto de un único fotograma (40ms). Lo descartamos para no falsear el estado ni el delta posterior.
-          bool isGlitch = (prevRawIzqR >= 0 && tempDelta > 120 && totalSpread < 40);
+          bool isGlitch = (prevRawIzqR >= 0 && tempDelta > 120 && chromaSpread < 35);
 
           if (!isGlitch) {
             prevRawIzqR = izqR; prevRawIzqG = izqG; prevRawIzqB = izqB;
@@ -434,14 +457,7 @@ interval:
             // Glitch eléctrico aislado: ignorar sin alterar contadores
           } else {
             consecutiveBlackFrames = 0;
-            // Modo Vídeo Real (Ambilight) vs Modo Lámpara / Estático:
-            // 1. En modo lámpara / estático: todos los bordes reciben el mismo color uniforme.
-            //    Incluso al cambiar de color en la app Govee (tempDelta alto), la dispersión entre bordes
-            //    (totalSpread) se mantiene baja (< 35). Por tanto, totalSpread < 35 NUNCA es vídeo.
-            // 2. En modo vídeo: la cámara enfoca la pantalla de la TV, generando dispersión cromática real
-            //    entre los distintos bordes de la pantalla (totalSpread >= 60), o dispersión moderada
-            //    con movimiento continuo (totalSpread >= 35 && tempDelta >= 20).
-            bool isRealVideo = (totalSpread >= 60 || (totalSpread >= 35 && tempDelta >= 20));
+            bool isRealVideo = (chromaSpread >= 48 || (chromaSpread >= 32 && tempDelta >= 20));
             if (isRealVideo) {
               consecutiveVideoFrames++;
               if (consecutiveStaticFrames > 1) consecutiveStaticFrames -= 2;
@@ -490,15 +506,17 @@ interval:
             }
           }
 
-          if (targetCandidate != currentMode) {
-            ESP_LOGW("mode", "CAMBIO DE ESTADO: %s -> %s (spread=%d, dt=%d, vF=%d, sF=%d, bF=%d)",
-                     currentMode.c_str(), targetCandidate.c_str(), totalSpread, tempDelta,
-                     consecutiveVideoFrames, consecutiveStaticFrames, consecutiveBlackFrames);
-            currentMode = targetCandidate;
-            currentSignalActive = (currentMode != "Standby");
-            consecutiveVideoFrames = 0;
-            consecutiveStaticFrames = 0;
-            consecutiveBlackFrames = 0;
+          if (targetCandidate != currentMode || id(govee_hardware_state).state != currentMode) {
+            if (targetCandidate != currentMode) {
+              ESP_LOGW("mode", "CAMBIO DE ESTADO: %s -> %s (spread=%d, dt=%d, vF=%d, sF=%d, bF=%d)",
+                       currentMode.c_str(), targetCandidate.c_str(), totalSpread, tempDelta,
+                       consecutiveVideoFrames, consecutiveStaticFrames, consecutiveBlackFrames);
+              currentMode = targetCandidate;
+              currentSignalActive = (currentMode != "Standby");
+              consecutiveVideoFrames = 0;
+              consecutiveStaticFrames = 0;
+              consecutiveBlackFrames = 0;
+            }
             id(govee_hardware_state).publish_state(currentMode);
             id(govee_signal_active).publish_state(currentSignalActive);
           }
