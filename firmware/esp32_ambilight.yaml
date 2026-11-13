@@ -470,11 +470,12 @@ interval:
             else consecutiveStaticFrames = 0;
           } else {
             // Modo Vídeo Real (Ambilight) vs Modo Lámpara / Estático:
-            // 1. En lámpara / estático: el color es homogéneo en el perímetro (totalSpread < 35)
-            //    Y los LEDs NO se mueven en el tiempo (tempDelta < 15).
-            // 2. En vídeo: contraste entre bordes (totalSpread >= 40 o chromaSpread >= 40),
-            //    O dinamismo / movimiento temporal de imagen continua (tempDelta >= 15).
-            bool isRealVideo = (totalSpread >= 40 || chromaSpread >= 40 || tempDelta >= 15);
+            // 1. En lámpara / estático: todos los LEDs reciben el mismo color homogéneo (spread < 25).
+            //    Cualquier ruido eléctrico en el cable único sin masa común puede generar un micro-salto
+            //    de valor (tempDelta), pero NUNCA dispersión espacial continua entre bordes de la TV.
+            // 2. En vídeo: contraste espacial real entre bordes de la pantalla (totalSpread >= 35 o chromaSpread >= 30),
+            //    o combinación de dispersión con dinamismo continuo (totalSpread >= 20 && tempDelta >= 15).
+            bool isRealVideo = (totalSpread >= 35 || chromaSpread >= 30 || (totalSpread >= 20 && tempDelta >= 15));
             if (isRealVideo) {
               consecutiveVideoFrames++;
               if (consecutiveStaticFrames > 1) consecutiveStaticFrames -= 2;
