@@ -543,13 +543,11 @@ interval:
 
             // Detección de Dinamismo y Dispersión Calibrada:
             // 1. isStrongVideo: Contraste espacial multizona real entre lados opuestos de la TV.
-            //    En cualquier color estático (incluso en colores pasteles a brillo máx con caída de tensión),
-            //    spatialContrast <= 26. En vídeo multizona, spatialContrast es 60..300.
-            bool isStrongVideo = (spatialContrast >= 45);
+            bool isStrongVideo = (spatialContrast >= 35);
 
-            // 2. isVideoActivity: Sensibilidad continua para retener el modo Vídeo una vez activo
-            //    (incluso en escenas de cine con fondos planos o transiciones suaves).
-            bool isVideoActivity = (isStrongVideo || spatialContrast >= 35 || tempDelta >= 20);
+            // 2. isVideoActivity: Sensibilidad continua para retener el modo Vídeo una vez activo.
+            //    En estático puro con filtro de mediana: spatialContrast <= 6 y tempDelta <= 5.
+            bool isVideoActivity = (isStrongVideo || spatialContrast >= 20 || tempDelta >= 12);
 
             if (isStrongVideo) {
               consecutiveStrongVideoFrames++;
@@ -583,7 +581,7 @@ interval:
           if (currentMode == "Standby") {
             // Salida instantánea de Standby al detectar luz/señal continua (>20 frames encendidos ~800ms):
             if (!isBlack && consecutiveAwakeFrames >= 20) {
-              if (consecutiveStrongVideoFrames >= 8) {
+              if (consecutiveStrongVideoFrames >= 8 || consecutiveVideoFrames >= 25) {
                 targetCandidate = "Vídeo";
               } else {
                 targetCandidate = "Estático";
@@ -594,8 +592,8 @@ interval:
             if (consecutiveBlackFrames >= 25) {
               // Pantalla/tira apagada en negro durante ~1.0s -> Standby
               targetCandidate = "Standby";
-            } else if (consecutiveStrongVideoFrames >= 8) {
-              // Con 8 frames (~320ms) de contraste espacial multizona real conmuta a Vídeo
+            } else if (consecutiveStrongVideoFrames >= 8 || consecutiveVideoFrames >= 35) {
+              // Con 8 frames (~320ms) de contraste multizona O 35 frames (~1.4s) de dinamismo continuo conmuta a Vídeo
               targetCandidate = "Vídeo";
             }
           } else if (currentMode == "Vídeo") {
@@ -603,8 +601,8 @@ interval:
             if (consecutiveBlackFrames >= 25) {
               // ~1.0s de negro absoluto sostenido -> Standby
               targetCandidate = "Standby";
-            } else if (consecutiveStaticFrames >= 45 && (now - lastVideoActivityTime >= 1800)) {
-              // 1.8s (45 frames de 40ms) de quietud absoluta sin dinamismo ni contraste para pasar a Estático
+            } else if (consecutiveStaticFrames >= 50 && (now - lastVideoActivityTime >= 2000)) {
+              // Exige 2.0s (50 frames de 40ms) de quietud absoluta sin dinamismo ni contraste para pasar a Estático
               targetCandidate = "Estático";
             }
           }
