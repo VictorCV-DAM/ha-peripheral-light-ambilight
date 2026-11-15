@@ -479,6 +479,7 @@ interval:
 
           // Integrador Leaky-Bucket Asimétrico con límites de saturación:
           static uint32_t lastVideoActivityTime = 0;
+          int spatialContrast = 0;
 
           if (isTransientBlackDrop) {
             // Ignorar micro-corte de 1..3 frames sin destruir sF ni vF
@@ -489,15 +490,15 @@ interval:
             // Contraste espacial perimetral directo (Izquierda vs Derecha, Techo vs Centro):
             int dColorLR = abs(izqR - derR) + abs(izqG - derG) + abs(izqB - derB);
             int dColorTC = abs(supR - cenR) + abs(supG - cenG) + abs(supB - cenB);
-            int spatialContrast = std::max(dColorLR, dColorTC);
+            spatialContrast = std::max(dColorLR, dColorTC);
 
             // Detección de Dinamismo y Dispersión Calibrada:
             // 1. isStrongVideo: Contraste espacial multizona real entre lados opuestos de la TV.
-            //    En modo lámpara (incluso con caída de tensión resistiva), dColorLR < 20 y dColorTC < 20.
-            bool isStrongVideo = (spatialContrast >= 45 || totalSpread >= 50);
+            //    En modo estático/lámpara (incluso con caída de tensión resistiva), dColorLR < 20 y dColorTC < 20.
+            bool isStrongVideo = (spatialContrast >= 45);
 
             // 2. isVideoActivity: Detección de actividad real de vídeo (espacial o temporal genuina).
-            bool isVideoActivity = (isStrongVideo || spatialContrast >= 28 || totalSpread >= 35 || tempDelta >= 35);
+            bool isVideoActivity = (isStrongVideo || spatialContrast >= 28 || tempDelta >= 55);
 
             if (isStrongVideo) {
               consecutiveStrongVideoFrames++;
@@ -508,8 +509,7 @@ interval:
 
             if (isVideoActivity) {
               consecutiveVideoFrames++;
-              // En vídeo activo, cualquier dinamismo o dispersión resetea a cero el contador estático
-              // para garantizar que escenas pausadas o fondos planos nunca degraden a estático en mitad de una película:
+              // En vídeo activo, resetea a cero el contador estático para garantizar estabilidad
               consecutiveStaticFrames = 0;
               if (consecutiveVideoFrames >= 3) {
                 lastVideoActivityTime = now;
@@ -553,16 +553,16 @@ interval:
             if (consecutiveBlackFrames >= 25) {
               // ~1.0s de negro absoluto sostenido -> Standby
               targetCandidate = "Standby";
-            } else if (consecutiveStaticFrames >= 50 && (now - lastVideoActivityTime >= 2000)) {
-              // Exige 2.0s (50 frames de 40ms) de predominancia estática sin vídeo genuino para pasar a Lámpara fija
+            } else if (consecutiveStaticFrames >= 40 && (now - lastVideoActivityTime >= 1600)) {
+              // 1.6s (40 frames de 40ms) de predominancia estática sin vídeo genuino para pasar a Estático
               targetCandidate = "Estático";
             }
           }
 
           if (targetCandidate != currentMode || id(govee_hardware_state).state != currentMode) {
             if (targetCandidate != currentMode) {
-              ESP_LOGW("mode", "CAMBIO DE ESTADO: %s -> %s (spread=%d, dt=%d, vF=%d, sF=%d, bF=%d)",
-                       currentMode.c_str(), targetCandidate.c_str(), totalSpread, tempDelta,
+              ESP_LOGW("mode", "CAMBIO DE ESTADO: %s -> %s (contrast=%d, dt=%d, vF=%d, sF=%d, bF=%d)",
+                       currentMode.c_str(), targetCandidate.c_str(), spatialContrast, tempDelta,
                        consecutiveVideoFrames, consecutiveStaticFrames, consecutiveBlackFrames);
               currentMode = targetCandidate;
               currentSignalActive = (currentMode != "Standby");
@@ -576,8 +576,8 @@ interval:
 
           static uint32_t lastDiagPrint = 0;
           if (now - lastDiagPrint >= 2000) {
-            ESP_LOGI("mode", "Govee Hardware: %s (spread=%d, dt=%d, vF=%d, sF=%d, bF=%d)",
-                     currentMode.c_str(), totalSpread, tempDelta,
+            ESP_LOGI("mode", "Govee Hardware: %s (contrast=%d, dt=%d, vF=%d, sF=%d, bF=%d)",
+                     currentMode.c_str(), spatialContrast, tempDelta,
                      consecutiveVideoFrames, consecutiveStaticFrames, consecutiveBlackFrames);
             lastDiagPrint = now;
           }
@@ -594,65 +594,33 @@ interval:
             return;
           }
 
-          // Suavizado temporal IIR (75/25) con Filtro de Rechazo de Glitches de 1-Frame (2-Frame Gate):
-          // En cable único sin GND, un pulso de ruido parásito altera a veces un único fotograma aislado.
-          // Si el salto es grande (>30), exige confirmación en 2 fotogramas consecutivos antes de actualizar
-          // la bombilla, eliminando por completo cualquier parpadeo o salto involuntario de tono.
+          // En cable único sin GND, si hay micro-corte transitorio (<160ms), no actualizamos bombillas:
           if (isTransientBlackDrop) {
             return;
           }
 
-          static int sIzqR = -1, sIzqG = -1, sIzqB = -1, cIzqR = -1, cIzqG = -1, cIzqB = -1;
-          static int sDerR = -1, sDerG = -1, sDerB = -1, cDerR = -1, cDerG = -1, cDerB = -1;
-          static int sCenR = -1, sCenG = -1, sCenB = -1, cCenR = -1, cCenG = -1, cCenB = -1;
-          static int sSupR = -1, sSupG = -1, sSupB = -1, cSupR = -1, cSupG = -1, cSupB = -1;
-
-          auto filterOutlier = [](int inR, int inG, int inB, int &sR, int &sG, int &sB, int &cR, int &cG, int &cB) {
-            if (sR < 0) {
-              sR = inR; sG = inG; sB = inB;
-              cR = inR; cG = inG; cB = inB;
-              return;
-            }
-            int diff = abs(inR - sR) + abs(inG - sG) + abs(inB - sB);
-            if (diff < 30) {
-              sR = inR; sG = inG; sB = inB;
-              cR = inR; cG = inG; cB = inB;
-            } else {
-              int cDiff = abs(inR - cR) + abs(inG - cG) + abs(inB - cB);
-              if (cDiff < 20) {
-                sR = inR; sG = inG; sB = inB;
-              } else {
-                cR = inR; cG = inG; cB = inB;
-              }
-            }
-          };
-
-          filterOutlier(izqR, izqG, izqB, sIzqR, sIzqG, sIzqB, cIzqR, cIzqG, cIzqB);
-          filterOutlier(derR, derG, derB, sDerR, sDerG, sDerB, cDerR, cDerG, cDerB);
-          filterOutlier(cenR, cenG, cenB, sCenR, sCenG, sCenB, cCenR, cCenG, cCenB);
-          filterOutlier(supR, supG, supB, sSupR, sSupG, sSupB, cSupR, cSupG, cSupB);
-
+          // Suavizado temporal IIR (75/25): respuesta suave, colores 100% auténticos y sincronizados
           if (fIzqR < 0) {
-            fIzqR = sIzqR; fIzqG = sIzqG; fIzqB = sIzqB;
-            fSupR = sSupR; fSupG = sSupG; fSupB = sSupB;
-            fCenR = sCenR; fCenG = sCenG; fCenB = sCenB;
-            fDerR = sDerR; fDerG = sDerG; fDerB = sDerB;
+            fIzqR = izqR; fIzqG = izqG; fIzqB = izqB;
+            fSupR = supR; fSupG = supG; fSupB = supB;
+            fCenR = cenR; fCenG = cenG; fCenB = cenB;
+            fDerR = derR; fDerG = derG; fDerB = derB;
           } else {
-            fIzqR = (fIzqR * 3 + sIzqR) / 4;
-            fIzqG = (fIzqG * 3 + sIzqG) / 4;
-            fIzqB = (fIzqB * 3 + sIzqB) / 4;
+            fIzqR = (fIzqR * 3 + izqR) / 4;
+            fIzqG = (fIzqG * 3 + izqG) / 4;
+            fIzqB = (fIzqB * 3 + izqB) / 4;
 
-            fSupR = (fSupR * 3 + sSupR) / 4;
-            fSupG = (fSupG * 3 + sSupG) / 4;
-            fSupB = (fSupB * 3 + sSupB) / 4;
+            fSupR = (fSupR * 3 + supR) / 4;
+            fSupG = (fSupG * 3 + supG) / 4;
+            fSupB = (fSupB * 3 + supB) / 4;
 
-            fCenR = (fCenR * 3 + sCenR) / 4;
-            fCenG = (fCenG * 3 + sCenG) / 4;
-            fCenB = (fCenB * 3 + sCenB) / 4;
+            fCenR = (fCenR * 3 + cenR) / 4;
+            fCenG = (fCenG * 3 + cenG) / 4;
+            fCenB = (fCenB * 3 + cenB) / 4;
 
-            fDerR = (fDerR * 3 + sDerR) / 4;
-            fDerG = (fDerG * 3 + sDerG) / 4;
-            fDerB = (fDerB * 3 + sDerB) / 4;
+            fDerR = (fDerR * 3 + derR) / 4;
+            fDerG = (fDerG * 3 + derG) / 4;
+            fDerB = (fDerB * 3 + derB) / 4;
           }
 
           static uint32_t lastSendIzq = 0;
