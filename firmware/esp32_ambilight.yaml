@@ -354,58 +354,45 @@ interval:
           };
 
           // WS2811 GRB: Byte 0 = G, Byte 1 = R, Byte 2 = B
-          // A. Zona Izquierda
-          long sR_izq = 0, sG_izq = 0, sB_izq = 0;
-          for (int i = 0; i < nIzq; i++) {
-            int k = getLedIndex(i);
-            sG_izq += ledData[k * 3 + 0];
-            sR_izq += ledData[k * 3 + 1];
-            sB_izq += ledData[k * 3 + 2];
-          }
-          int izqR = sR_izq / nIzq;
-          int izqG = sG_izq / nIzq;
-          int izqB = sB_izq / nIzq;
+          // Función de Mediana Espacial por Zona:
+          // En cable único sin GND, si 1 o 2 LEDs individuales sufren una inversión de bits (bit-flip)
+          // o ruido de conmutación en Byte 0, la media aritmética tradicional se contamina (ej: G=255/7 = 36),
+          // provocando parpadeos amarillos sobre rojo puro.
+          // La MEDIANA espacial descarta al 100% cualquier LED anómalo o corrupto dentro de la zona.
+          auto getZoneMedian = [&](int startVirt, int count, int &outR, int &outG, int &outB) {
+            if (count <= 0) { outR = 0; outG = 0; outB = 0; return; }
+            const int MAX_Z = 32;
+            int n = (count > MAX_Z) ? MAX_Z : count;
+            uint8_t rB[MAX_Z], gB[MAX_Z], bB[MAX_Z];
+            for (int i = 0; i < n; i++) {
+              int k = getLedIndex(startVirt + i);
+              gB[i] = ledData[k * 3 + 0];
+              rB[i] = ledData[k * 3 + 1];
+              bB[i] = ledData[k * 3 + 2];
+            }
+            std::sort(rB, rB + n);
+            std::sort(gB, gB + n);
+            std::sort(bB, bB + n);
+            outR = rB[n / 2];
+            outG = gB[n / 2];
+            outB = bB[n / 2];
+          };
 
-          // B. Zona Techo (Borde Superior)
+          int izqR = 0, izqG = 0, izqB = 0;
+          getZoneMedian(0, nIzq, izqR, izqG, izqB);
+
           int startSupVirt = nIzq;
-          long sR_sup = 0, sG_sup = 0, sB_sup = 0;
-          for (int i = startSupVirt; i < startSupVirt + nSup; i++) {
-            int k = getLedIndex(i);
-            sG_sup += ledData[k * 3 + 0];
-            sR_sup += ledData[k * 3 + 1];
-            sB_sup += ledData[k * 3 + 2];
-          }
-          int supR = (nSup > 0) ? (sR_sup / nSup) : 0;
-          int supG = (nSup > 0) ? (sG_sup / nSup) : 0;
-          int supB = (nSup > 0) ? (sB_sup / nSup) : 0;
+          int supR = 0, supG = 0, supB = 0;
+          getZoneMedian(startSupVirt, nSup, supR, supG, supB);
 
-          // C. Zona Derecha
           int startDerVirt = nIzq + nSup;
-          long sR_der = 0, sG_der = 0, sB_der = 0;
-          for (int i = startDerVirt; i < startDerVirt + nDer; i++) {
-            int k = getLedIndex(i);
-            sG_der += ledData[k * 3 + 0];
-            sR_der += ledData[k * 3 + 1];
-            sB_der += ledData[k * 3 + 2];
-          }
-          int derR = sR_der / nDer;
-          int derG = sG_der / nDer;
-          int derB = sB_der / nDer;
+          int derR = 0, derG = 0, derB = 0;
+          getZoneMedian(startDerVirt, nDer, derR, derG, derB);
 
-          // D. Zona Centro (Borde Inferior / Mesa)
           int startInfVirt = startDerVirt + nDer;
           if (nInf < 1) nInf = 1;
-
-          long sR_cen = 0, sG_cen = 0, sB_cen = 0;
-          for (int i = startInfVirt; i < startInfVirt + nInf; i++) {
-            int k = getLedIndex(i);
-            sG_cen += ledData[k * 3 + 0];
-            sR_cen += ledData[k * 3 + 1];
-            sB_cen += ledData[k * 3 + 2];
-          }
-          int cenR = sR_cen / nInf;
-          int cenG = sG_cen / nInf;
-          int cenB = sB_cen / nInf;
+          int cenR = 0, cenG = 0, cenB = 0;
+          getZoneMedian(startInfVirt, nInf, cenR, cenG, cenB);
 
           // Filtrado de Mediana 3-Tap:
           // En cable único sin GND, el ruido por oscilación capacitiva o armónicos de 50Hz altera a veces
@@ -442,6 +429,29 @@ interval:
           cenR = median3(hCenR[0], hCenR[1], hCenR[2]);
           cenG = median3(hCenG[0], hCenG[1], hCenG[2]);
           cenB = median3(hCenB[0], hCenB[1], hCenB[2]);
+
+          // Purificación Cromática y Supresión de Ruido en Primarios:
+          // Elimina el cross-talk de la cámara Govee y el rizado capacitivo de masa flotante.
+          // Cuando un color primario es dominante (>= 70), los canales secundarios residuales
+          // (menores al 30% del primario y <= 65) son artefactos de sensor/bus que ensucian
+          // el color (haciendo que el Rojo puro parpadee a Amarillo o Verde).
+          auto purifyZoneColor = [](int &r, int &g, int &b) {
+            if (r >= 70 && b < 40 && g <= 65) {
+              if (g * 3 < r) g = 0;
+              if (b * 3 < r) b = 0;
+            } else if (g >= 70 && b < 40 && r <= 65) {
+              if (r * 3 < g) r = 0;
+              if (b * 3 < g) b = 0;
+            } else if (b >= 70 && r < 40 && g <= 65) {
+              if (g * 3 < b) g = 0;
+              if (r * 3 < b) r = 0;
+            }
+          };
+
+          purifyZoneColor(izqR, izqG, izqB);
+          purifyZoneColor(supR, supG, supB);
+          purifyZoneColor(derR, derG, derB);
+          purifyZoneColor(cenR, cenG, cenB);
 
           // Detección del estado real del hardware (Vídeo vs Estático vs Standby)
           int maxOverall = std::max({izqR, izqG, izqB, supR, supG, supB, derR, derG, derB, cenR, cenG, cenB});
@@ -546,8 +556,8 @@ interval:
             bool isStrongVideo = (spatialContrast >= 35);
 
             // 2. isVideoActivity: Sensibilidad continua para retener el modo Vídeo una vez activo.
-            //    En estático puro con filtro de mediana: spatialContrast <= 6 y tempDelta <= 5.
-            bool isVideoActivity = (isStrongVideo || spatialContrast >= 20 || tempDelta >= 12);
+            //    En estático puro con filtro y purificación: spatialContrast <= 10 y tempDelta <= 6.
+            bool isVideoActivity = (isStrongVideo || spatialContrast >= 28 || tempDelta >= 24);
 
             if (isStrongVideo) {
               consecutiveStrongVideoFrames++;
