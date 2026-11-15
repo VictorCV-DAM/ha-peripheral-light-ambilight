@@ -363,58 +363,55 @@ interval:
           };
 
           // WS2811 GRB: Byte 0 = G, Byte 1 = R, Byte 2 = B
+          // Media recortada (trimmed mean) por zona: descarta el mínimo y máximo de cada borde
+          // para inmunizar las zonas frente a LEDs individuales con bits desplazados por ruido de 50Hz sin GND.
+          auto calcZoneTrimmed = [&](int startVirt, int count, int &outR, int &outG, int &outB) {
+            if (count <= 0) { outR = 0; outG = 0; outB = 0; return; }
+            long sR = 0, sG = 0, sB = 0;
+            int minR = 255, maxR = 0, minG = 255, maxG = 0, minB = 255, maxB = 0;
+            for (int i = startVirt; i < startVirt + count; i++) {
+              int k = getLedIndex(i);
+              int g = ledData[k * 3 + 0];
+              int r = ledData[k * 3 + 1];
+              int b = ledData[k * 3 + 2];
+              sR += r; sG += g; sB += b;
+              if (r < minR) minR = r;
+              if (r > maxR) maxR = r;
+              if (g < minG) minG = g;
+              if (g > maxG) maxG = g;
+              if (b < minB) minB = b;
+              if (b > maxB) maxB = b;
+            }
+            if (count >= 4) {
+              outR = (sR - minR - maxR) / (count - 2);
+              outG = (sG - minG - maxG) / (count - 2);
+              outB = (sB - minB - maxB) / (count - 2);
+            } else {
+              outR = sR / count;
+              outG = sG / count;
+              outB = sB / count;
+            }
+          };
+
           // A. Zona Izquierda
-          long sR_izq = 0, sG_izq = 0, sB_izq = 0;
-          for (int i = 0; i < nIzq; i++) {
-            int k = getLedIndex(i);
-            sG_izq += ledData[k * 3 + 0];
-            sR_izq += ledData[k * 3 + 1];
-            sB_izq += ledData[k * 3 + 2];
-          }
-          int izqR = sR_izq / nIzq;
-          int izqG = sG_izq / nIzq;
-          int izqB = sB_izq / nIzq;
+          int izqR = 0, izqG = 0, izqB = 0;
+          calcZoneTrimmed(0, nIzq, izqR, izqG, izqB);
 
           // B. Zona Techo (Borde Superior)
           int startSupVirt = nIzq;
-          long sR_sup = 0, sG_sup = 0, sB_sup = 0;
-          for (int i = startSupVirt; i < startSupVirt + nSup; i++) {
-            int k = getLedIndex(i);
-            sG_sup += ledData[k * 3 + 0];
-            sR_sup += ledData[k * 3 + 1];
-            sB_sup += ledData[k * 3 + 2];
-          }
-          int supR = (nSup > 0) ? (sR_sup / nSup) : 0;
-          int supG = (nSup > 0) ? (sG_sup / nSup) : 0;
-          int supB = (nSup > 0) ? (sB_sup / nSup) : 0;
+          int supR = 0, supG = 0, supB = 0;
+          calcZoneTrimmed(startSupVirt, nSup, supR, supG, supB);
 
           // C. Zona Derecha
           int startDerVirt = nIzq + nSup;
-          long sR_der = 0, sG_der = 0, sB_der = 0;
-          for (int i = startDerVirt; i < startDerVirt + nDer; i++) {
-            int k = getLedIndex(i);
-            sG_der += ledData[k * 3 + 0];
-            sR_der += ledData[k * 3 + 1];
-            sB_der += ledData[k * 3 + 2];
-          }
-          int derR = sR_der / nDer;
-          int derG = sG_der / nDer;
-          int derB = sB_der / nDer;
+          int derR = 0, derG = 0, derB = 0;
+          calcZoneTrimmed(startDerVirt, nDer, derR, derG, derB);
 
           // D. Zona Centro (Borde Inferior / Mesa)
           int startInfVirt = startDerVirt + nDer;
           if (nInf < 1) nInf = 1;
-
-          long sR_cen = 0, sG_cen = 0, sB_cen = 0;
-          for (int i = startInfVirt; i < startInfVirt + nInf; i++) {
-            int k = getLedIndex(i);
-            sG_cen += ledData[k * 3 + 0];
-            sR_cen += ledData[k * 3 + 1];
-            sB_cen += ledData[k * 3 + 2];
-          }
-          int cenR = sR_cen / nInf;
-          int cenG = sG_cen / nInf;
-          int cenB = sB_cen / nInf;
+          int cenR = 0, cenG = 0, cenB = 0;
+          calcZoneTrimmed(startInfVirt, nInf, cenR, cenG, cenB);
 
           // Filtrado de Mediana 5-Tap:
           // En cable único sin GND, el batimiento entre los 50Hz de red y el muestreo de 25Hz (40ms)
@@ -451,29 +448,8 @@ interval:
           cenG = median5(hCenG[0], hCenG[1], hCenG[2], hCenG[3], hCenG[4]);
           cenB = median5(hCenB[0], hCenB[1], hCenB[2], hCenB[3], hCenB[4]);
 
-          // Compresión cromática suave para escenas dominantemente rojas:
-          // En escenas rojas de TV, la cámara Govee capta bleed óptico de verde (G=35..60).
-          // En tiras LED RGB como la del comedor, ese verde residual enciende los LEDs verdes
-          // provocando un microparpadeo amarillento.
-          // Aplicamos una curva polinómica cúbica suave (sin saltos ni umbrales duros)
-          // que atenúa el ruido de G por debajo de 80 cuando R domina netamente.
-          auto smoothRedPurity = [](int &r, int &g, int &b) {
-            if (r >= 90 && b < 50 && g < 80 && (r > g * 2)) {
-              float rg = (float)g / 80.0f;
-              g = (int)(g * rg * rg);
-              if (b < 35) {
-                float rb = (float)b / 35.0f;
-                b = (int)(b * rb * rb);
-              }
-            }
-          };
-
-          smoothRedPurity(izqR, izqG, izqB);
-          smoothRedPurity(supR, supG, supB);
-          smoothRedPurity(derR, derG, derB);
-          smoothRedPurity(cenR, cenG, cenB);
-
-          // Detección del estado real del hardware (Vídeo vs Estático vs Standby)
+          // Detección del estado real del hardware (Vídeo vs Estático vs Standby) ANTES de smoothRedPurity
+          // para no aplastar la dispersión real de cámara en escenas cálidas/rojas de vídeo:
           int maxOverall = std::max({izqR, izqG, izqB, supR, supG, supB, derR, derG, derB, cenR, cenG, cenB});
           bool isBlack = (maxOverall <= 4);
 
@@ -557,12 +533,15 @@ interval:
           consecutiveAwakeFrames = std::min(consecutiveAwakeFrames, 100);
 
           // Integrador Leaky-Bucket Asimétrico con límites de saturación:
+          // En cable único sin GND, el batimiento entre el reloj de trama (~24.9Hz) y la red de 50Hz
+          // barre la ventana de paquete WS2811 (1.11ms de cada 40ms) durante 12..28 fotogramas (~0.5s..1.1s)
+          // cada ~10 segundos, seguido de ~220 fotogramas (~8.9s) de señal 100% limpia y uniforme.
           static uint32_t lastVideoActivityTime = 0;
           int spatialContrast = 0;
           bool isPerimeterUniform = false;
 
           if (isTransientBlackDrop) {
-            // Ignorar micro-corte de 1..3 frames sin destruir sF ni vF
+            // Ignorar micro-corte de 1..2 frames sin destruir sF ni vF
           } else if (isBlack) {
             if (consecutiveVideoFrames > 0) consecutiveVideoFrames--;
             if (consecutiveStaticFrames > 0) consecutiveStaticFrames--;
@@ -572,40 +551,39 @@ interval:
             int dColorTC = abs(supR - cenR) + abs(supG - cenG) + abs(supB - cenB);
             spatialContrast = std::max(dColorLR, dColorTC);
 
-            // Detección de Dinamismo y Dispersión Calibrada:
-            // 1. hasSpatialDiversity: Contraste multizona real en ambos ejes (izquierda/derecha y dispersión global).
-            //    En estático puro o color fijo: dColorLR <= 10 y rawSpread <= 20. En vídeo multizona: dColorLR >= 42 y rawSpread >= 55.
+            // 1. hasSpatialDiversity: Contraste multizona real en ambos ejes.
             bool hasSpatialDiversity = ((dColorLR >= 42 && rawSpread >= 55) || (dColorLR >= 28 && rawSpread >= 95) || dColorTC >= 110);
 
-            // 2. isPerimeterUniform: Todos los 36 LEDs del perímetro tienen el mismo color (modo Color/Estático de la app Govee).
+            // 2. isPerimeterUniform: Todos los bordes tienen el mismo color.
             isPerimeterUniform = (dColorLR <= 20 && rawSpread <= 30);
 
             // 3. hasMotion: Movimiento temporal continuo con contraste espacial simultáneo.
-            //    Ignora derivas en modo común de 50Hz (cable único sin GND) y ajustes de color/brillo en la app Govee.
             bool hasMotion = (tempDelta >= 32 && dColorLR >= 25 && rawSpread >= 40);
 
-            // 4. isVideoActivity: Hay actividad si hay contraste espacial multizona O movimiento con contraste.
+            // 4. isVideoActivity: Actividad si hay contraste espacial multizona O movimiento con contraste.
             bool isVideoActivity = (hasSpatialDiversity || hasMotion);
 
-            // 5. isTrulyStatic: Perímetro uniforme y estable (tolera micro-rizado de 50Hz de masa flotante).
-            bool isTrulyStatic = (isPerimeterUniform && tempDelta <= 35);
+            // 5. isTrulyStatic: Perímetro uniforme y congelado (en modo estático real, durante los ~8.9s
+            //    entre barridos de 50Hz, dColorLR <= 12, rawSpread <= 18 y tempDelta <= 12).
+            bool isTrulyStatic = (dColorLR <= 12 && rawSpread <= 18 && tempDelta <= 12);
 
             if (hasSpatialDiversity) {
               consecutiveStrongVideoFrames++;
             } else if (isPerimeterUniform) {
-              consecutiveStrongVideoFrames = std::max(0, consecutiveStrongVideoFrames - 3);
+              // Purga rápida (-6/frame): borra cualquier barrido de batimiento de 50Hz (<=28 frames) en <200ms
+              consecutiveStrongVideoFrames = std::max(0, consecutiveStrongVideoFrames - 6);
             } else {
               if (consecutiveStrongVideoFrames > 0) consecutiveStrongVideoFrames--;
             }
-            consecutiveStrongVideoFrames = std::min(consecutiveStrongVideoFrames, 50);
+            consecutiveStrongVideoFrames = std::min(consecutiveStrongVideoFrames, 100);
 
             if (isVideoActivity) {
               consecutiveVideoFrames++;
-              if (consecutiveVideoFrames >= 5) {
+              if (consecutiveVideoFrames >= 10) {
                 lastVideoActivityTime = now;
               }
             } else if (isPerimeterUniform) {
-              consecutiveVideoFrames = std::max(0, consecutiveVideoFrames - 3);
+              consecutiveVideoFrames = std::max(0, consecutiveVideoFrames - 6);
             } else {
               if (consecutiveVideoFrames > 0) {
                 consecutiveVideoFrames--;
@@ -614,17 +592,18 @@ interval:
 
             if (isTrulyStatic) {
               consecutiveStaticFrames++;
-            } else if (isPerimeterUniform) {
-              // Cambio suave de color uniforme (rueda de la app o deriva de masa): mantener contador sin resetear
-            } else if (hasSpatialDiversity && consecutiveStrongVideoFrames >= 10) {
+            } else if (isPerimeterUniform && tempDelta <= 28) {
+              // Micro-rizado suave en modo común: mantener contador sin resetear
+            } else if (hasSpatialDiversity && consecutiveStrongVideoFrames >= 38) {
+              // Solo resetear a 0 cuando el vídeo multizona supera el techo físico de barrido de 50Hz (>1.5s)
               consecutiveStaticFrames = 0;
             } else {
-              consecutiveStaticFrames = std::max(0, consecutiveStaticFrames - 3);
+              consecutiveStaticFrames = std::max(0, consecutiveStaticFrames - 2);
             }
           }
 
           // Evitar desbordamiento de contadores:
-          consecutiveVideoFrames = std::min(consecutiveVideoFrames, 100);
+          consecutiveVideoFrames = std::min(consecutiveVideoFrames, 120);
           consecutiveStaticFrames = std::min(consecutiveStaticFrames, 600);
           consecutiveBlackFrames = std::min(consecutiveBlackFrames, 150);
 
@@ -633,9 +612,9 @@ interval:
           if (currentMode == "Standby") {
             // Salida de Standby al detectar luz/señal continua (>20 frames encendidos ~800ms):
             if (!isBlack && consecutiveAwakeFrames >= 20) {
-              if (consecutiveStrongVideoFrames >= 12 || consecutiveVideoFrames >= 20) {
+              if (consecutiveStrongVideoFrames >= 16 || consecutiveVideoFrames >= 20) {
                 targetCandidate = "Vídeo";
-              } else if (isPerimeterUniform && consecutiveStaticFrames >= 15) {
+              } else if (isPerimeterUniform && consecutiveStaticFrames >= 12) {
                 targetCandidate = "Estático";
               } else {
                 targetCandidate = previousActiveMode;
@@ -646,9 +625,10 @@ interval:
             if (consecutiveBlackFrames >= 100) {
               // Pantalla/tira apagada en negro durante ~4.0s -> Standby
               targetCandidate = "Standby";
-            } else if (consecutiveStrongVideoFrames >= 20 || consecutiveVideoFrames >= 40) {
-              // Con 20 frames (~800ms) de contraste multizona fuerte O 40 frames (~1.6s) de actividad de vídeo conmuta a Vídeo.
-              // Los cambios de color/brillo en la app Govee tienen perímetro uniforme y decaen rápidamente (-3/frame).
+            } else if (consecutiveStrongVideoFrames >= 55 || consecutiveVideoFrames >= 68) {
+              // Exige >=55 frames (~2.2s) de contraste multizona fuerte O >=68 frames (~2.7s) de vídeo continuo.
+              // Como el barrido físico de 50Hz sobre el paquete WS2811 de 1.11ms dura como máximo 28 frames (~1.1s)
+              // y se purga a 0 (-6/frame) en los 8.9s siguientes, JAMÁS puede disparar un falso cambio a Vídeo.
               targetCandidate = "Vídeo";
             }
           } else if (currentMode == "Vídeo") {
@@ -656,8 +636,8 @@ interval:
             if (consecutiveBlackFrames >= 100) {
               // ~4.0s de negro absoluto sostenido -> Standby
               targetCandidate = "Standby";
-            } else if (consecutiveStaticFrames >= 70) {
-              // Transición a Estático: ~2.8s (70 frames) de señal perimetral uniforme y estable.
+            } else if (consecutiveStaticFrames >= 75) {
+              // Transición a Estático: ~3.0s (75 frames) de señal perimetral uniforme y congelada.
               targetCandidate = "Estático";
             }
           }
@@ -694,8 +674,6 @@ interval:
           if (!id(modo_ambilight).state) {
             fIzqR = -1; fSupR = -1; fCenR = -1; fDerR = -1;
             pIzqR = -1; pSupR = -1; pCenR = -1; pDerR = -1;
-            // CRÍTICO: NO resetear hIzqR[0] = -1 aquí. Si modo_ambilight se apaga (ej. automatización HA en Estático),
-            // el filtro de mediana de 5 muestras DEBE seguir activo para evitar falsos saltos a Vídeo por ruido sin GND.
             if (millis() - tDiag >= 3000) {
               ESP_LOGI("sniffer", "PAUSADO: Modo Ambilight está APAGADO en Home Assistant.");
               tDiag = millis();
@@ -703,15 +681,30 @@ interval:
             return;
           }
 
-          // En cable único sin GND, si hay micro-corte transitorio (<160ms), no actualizamos bombillas:
-          if (isTransientBlackDrop) {
+          // En cable único sin GND, si hay micro-corte transitorio (<160ms) o si estamos en Estático
+          // y pasa una ráfaga corrupta no uniforme, no ensuciamos las bombillas del salón:
+          if (isTransientBlackDrop || (currentMode == "Estático" && !isPerimeterUniform)) {
             return;
           }
 
+          // Compresión cromática suave para escenas dominantemente rojas (aplicada solo a la salida de bombillas):
+          auto smoothRedPurity = [](int &r, int &g, int &b) {
+            if (r >= 90 && b < 50 && g < 80 && (r > g * 2)) {
+              float rg = (float)g / 80.0f;
+              g = (int)(g * rg * rg);
+              if (b < 35) {
+                float rb = (float)b / 35.0f;
+                b = (int)(b * rb * rb);
+              }
+            }
+          };
+
+          smoothRedPurity(izqR, izqG, izqB);
+          smoothRedPurity(supR, supG, supB);
+          smoothRedPurity(derR, derG, derB);
+          smoothRedPurity(cenR, cenG, cenB);
+
           // Suavizado temporal IIR adaptativo:
-          // Para micro-variaciones y oscilaciones de balance de blancos de la cámara (< 28),
-          // aplica filtrado profundo (7/8) que estabiliza por completo tonos pasteles y neutros (rosado vs blanquecino).
-          // Para transiciones reales de escena (>= 28), aplica respuesta rápida (3/4).
           auto smoothAdaptive = [](int currentF, int newTarget) -> int {
             if (currentF < 0) return newTarget;
             int diff = abs(newTarget - currentF);
@@ -722,41 +715,44 @@ interval:
             }
           };
 
-          // Detección de zonas en negro (calibrada para sesgo óptico de cámara en escenas oscuras):
-          bool blackIzq = (izqR <= 14 && izqG <= 14 && izqB <= 14);
-          bool blackDer = (derR <= 14 && derG <= 14 && derB <= 14);
-          bool blackCen = (cenR <= 14 && cenG <= 14 && cenB <= 14);
-          bool blackSup = (supR <= 14 && supG <= 14 && supB <= 14);
+          // Detección de zonas en negro en tiempo real (supera el suelo de low_brightness de 20s de Govee H6199):
+          bool blackIzq = (std::max({izqR, izqG, izqB}) <= 18 && (izqR + izqG + izqB) <= 36);
+          bool blackDer = (std::max({derR, derG, derB}) <= 18 && (derR + derG + derB) <= 36);
+          bool blackCen = (std::max({cenR, cenG, cenB}) <= 18 && (cenR + cenG + cenB) <= 36);
+          bool blackSup = (std::max({supR, supG, supB}) <= 18 && (supR + supG + supB) <= 36);
+
+          bool prevBlackIzq = (pIzqR >= 0 && pIzqR <= 4 && pIzqG <= 4 && pIzqB <= 4);
+          bool prevBlackDer = (pDerR >= 0 && pDerR <= 4 && pDerG <= 4 && pDerB <= 4);
+          bool prevBlackCen = (pCenR >= 0 && pCenR <= 4 && pCenG <= 4 && pCenB <= 4);
+          bool prevBlackSup = (pSupR >= 0 && pSupR <= 4 && pSupG <= 4 && pSupB <= 4);
 
           if (id(modo_blackout).state) {
-            // En Blackout Mode activo: si la zona cae a negro, cae a 0 de inmediato (0ms de retraso)
-            // sin esperar a que el filtro IIR decaiga lentamente a lo largo de 20 fotogramas.
             if (blackIzq) { fIzqR = 0; fIzqG = 0; fIzqB = 0; }
             else {
-              fIzqR = (pIzqR <= 4) ? izqR : smoothAdaptive(fIzqR, izqR);
-              fIzqG = (pIzqG <= 4) ? izqG : smoothAdaptive(fIzqG, izqG);
-              fIzqB = (pIzqB <= 4) ? izqB : smoothAdaptive(fIzqB, izqB);
+              fIzqR = prevBlackIzq ? izqR : smoothAdaptive(fIzqR, izqR);
+              fIzqG = prevBlackIzq ? izqG : smoothAdaptive(fIzqG, izqG);
+              fIzqB = prevBlackIzq ? izqB : smoothAdaptive(fIzqB, izqB);
             }
 
             if (blackDer) { fDerR = 0; fDerG = 0; fDerB = 0; }
             else {
-              fDerR = (pDerR <= 4) ? derR : smoothAdaptive(fDerR, derR);
-              fDerG = (pDerG <= 4) ? derG : smoothAdaptive(fDerG, derG);
-              fDerB = (pDerB <= 4) ? derB : smoothAdaptive(fDerB, derB);
+              fDerR = prevBlackDer ? derR : smoothAdaptive(fDerR, derR);
+              fDerG = prevBlackDer ? derG : smoothAdaptive(fDerG, derG);
+              fDerB = prevBlackDer ? derB : smoothAdaptive(fDerB, derB);
             }
 
             if (blackCen) { fCenR = 0; fCenG = 0; fCenB = 0; }
             else {
-              fCenR = (pCenR <= 4) ? cenR : smoothAdaptive(fCenR, cenR);
-              fCenG = (pCenG <= 4) ? cenG : smoothAdaptive(fCenG, cenG);
-              fCenB = (pCenB <= 4) ? cenB : smoothAdaptive(fCenB, cenB);
+              fCenR = prevBlackCen ? cenR : smoothAdaptive(fCenR, cenR);
+              fCenG = prevBlackCen ? cenG : smoothAdaptive(fCenG, cenG);
+              fCenB = prevBlackCen ? cenB : smoothAdaptive(fCenB, cenB);
             }
 
             if (blackSup) { fSupR = 0; fSupG = 0; fSupB = 0; }
             else {
-              fSupR = (pSupR <= 4) ? supR : smoothAdaptive(fSupR, supR);
-              fSupG = (pSupG <= 4) ? supG : smoothAdaptive(fSupG, supG);
-              fSupB = (pSupB <= 4) ? supB : smoothAdaptive(fSupB, supB);
+              fSupR = prevBlackSup ? supR : smoothAdaptive(fSupR, supR);
+              fSupG = prevBlackSup ? supG : smoothAdaptive(fSupG, supG);
+              fSupB = prevBlackSup ? supB : smoothAdaptive(fSupB, supB);
             }
           } else {
             if (fIzqR < 0) {
@@ -801,9 +797,9 @@ interval:
 
           bool sentAny = false;
 
-          // Eventos de apagado en negro (Blackout en tiempo real):
+          // Eventos de apagado en negro (Blackout en tiempo real, trans=0.0s al apagar):
           bool isBlackTarget_izq = (fIzqR <= 4 && fIzqG <= 4 && fIzqB <= 4);
-          bool wasBlack_izq = (pIzqR <= 4 && pIzqG <= 4 && pIzqB <= 4);
+          bool wasBlack_izq = (pIzqR >= 0 && pIzqR <= 4 && pIzqG <= 4 && pIzqB <= 4);
           bool blackoutEvent_izq = (id(modo_blackout).state && (isBlackTarget_izq != wasBlack_izq));
 
           int dR_izq = abs(fIzqR - pIzqR);
@@ -812,14 +808,14 @@ interval:
           bool chgIzq = (dR_izq >= 18 || dG_izq >= 18 || dB_izq >= 18 || (dR_izq + dG_izq + dB_izq >= 28) || blackoutEvent_izq);
           if ((chgIzq || (force && (dR_izq >= 4 || dG_izq >= 4 || dB_izq >= 4))) &&
               (now - lastSendIzq >= minInterval || (force && chgIzq) || blackoutEvent_izq)) {
-            id(enviar_color_ha)->execute("light.comedor_luces_izquierda", fIzqR, fIzqG, fIzqB, trans);
+            id(enviar_color_ha)->execute("light.comedor_luces_izquierda", fIzqR, fIzqG, fIzqB, (id(modo_blackout).state && isBlackTarget_izq) ? 0.0f : trans);
             pIzqR = fIzqR; pIzqG = fIzqG; pIzqB = fIzqB;
             lastSendIzq = now;
             sentAny = true;
           }
 
           bool isBlackTarget_der = (fDerR <= 4 && fDerG <= 4 && fDerB <= 4);
-          bool wasBlack_der = (pDerR <= 4 && pDerG <= 4 && pDerB <= 4);
+          bool wasBlack_der = (pDerR >= 0 && pDerR <= 4 && pDerG <= 4 && pDerB <= 4);
           bool blackoutEvent_der = (id(modo_blackout).state && (isBlackTarget_der != wasBlack_der));
 
           int dR_der = abs(fDerR - pDerR);
@@ -828,14 +824,14 @@ interval:
           bool chgDer = (dR_der >= 18 || dG_der >= 18 || dB_der >= 18 || (dR_der + dG_der + dB_der >= 28) || blackoutEvent_der);
           if ((chgDer || (force && (dR_der >= 4 || dG_der >= 4 || dB_der >= 4))) &&
               (now - lastSendDer >= minInterval || (force && chgDer) || blackoutEvent_der)) {
-            id(enviar_color_ha)->execute("light.comedor_luces_derecha", fDerR, fDerG, fDerB, trans);
+            id(enviar_color_ha)->execute("light.comedor_luces_derecha", fDerR, fDerG, fDerB, (id(modo_blackout).state && isBlackTarget_der) ? 0.0f : trans);
             pDerR = fDerR; pDerG = fDerG; pDerB = fDerB;
             lastSendDer = now;
             sentAny = true;
           }
 
           bool isBlackTarget_cen = (fCenR <= 4 && fCenG <= 4 && fCenB <= 4);
-          bool wasBlack_cen = (pCenR <= 4 && pCenG <= 4 && pCenB <= 4);
+          bool wasBlack_cen = (pCenR >= 0 && pCenR <= 4 && pCenG <= 4 && pCenB <= 4);
           bool blackoutEvent_cen = (id(modo_blackout).state && (isBlackTarget_cen != wasBlack_cen));
 
           int dR_cen = abs(fCenR - pCenR);
@@ -844,7 +840,7 @@ interval:
           bool chgCen = (dR_cen >= 18 || dG_cen >= 18 || dB_cen >= 18 || (dR_cen + dG_cen + dB_cen >= 28) || blackoutEvent_cen);
           if ((chgCen || (force && (dR_cen >= 4 || dG_cen >= 4 || dB_cen >= 4))) &&
               (now - lastSendCen >= minInterval || (force && chgCen) || blackoutEvent_cen)) {
-            id(enviar_color_ha)->execute("light.comedor_luces_centro", fCenR, fCenG, fCenB, trans);
+            id(enviar_color_ha)->execute("light.comedor_luces_centro", fCenR, fCenG, fCenB, (id(modo_blackout).state && isBlackTarget_cen) ? 0.0f : trans);
             pCenR = fCenR; pCenG = fCenG; pCenB = fCenB;
             lastSendCen = now;
             sentAny = true;
@@ -852,7 +848,7 @@ interval:
 
           if (id(activar_techo).state) {
             bool isBlackTarget_sup = (fSupR <= 4 && fSupG <= 4 && fSupB <= 4);
-            bool wasBlack_sup = (pSupR <= 4 && pSupG <= 4 && pSupB <= 4);
+            bool wasBlack_sup = (pSupR >= 0 && pSupR <= 4 && pSupG <= 4 && pSupB <= 4);
             bool blackoutEvent_sup = (id(modo_blackout).state && (isBlackTarget_sup != wasBlack_sup));
 
             int dR_sup = abs(fSupR - pSupR);
@@ -861,7 +857,7 @@ interval:
             bool chgSup = (dR_sup >= 18 || dG_sup >= 18 || dB_sup >= 18 || (dR_sup + dG_sup + dB_sup >= 28) || blackoutEvent_sup);
             if ((chgSup || (force && (dR_sup >= 4 || dG_sup >= 4 || dB_sup >= 4))) &&
                 (now - lastSendSup >= minInterval || (force && chgSup) || blackoutEvent_sup)) {
-              id(enviar_color_ha)->execute("light.comedor_luces_techo", fSupR, fSupG, fSupB, trans);
+              id(enviar_color_ha)->execute("light.comedor_luces_techo", fSupR, fSupG, fSupB, (id(modo_blackout).state && isBlackTarget_sup) ? 0.0f : trans);
               pSupR = fSupR; pSupG = fSupG; pSupB = fSupB;
               lastSendSup = now;
               sentAny = true;
