@@ -559,26 +559,28 @@ interval:
             if (consecutiveStaticFrames > 0) consecutiveStaticFrames--;
           } else {
             // Contraste espacial perimetral directo:
-            // 1. dColorLR: Diferencia horizontal (Izquierda vs Derecha).
-            //    Dado que la cámara está centrada horizontalmente, los ángulos y reflejos son idénticos.
-            //    En estático puro o color fijo, dColorLR es estrictamente <= 10.
-            //    En vídeo real con contenido multizona, dColorLR es >= 40 (típicamente 60..250).
             int dColorLR = abs(izqR - derR) + abs(izqG - derG) + abs(izqB - derB);
-
-            // 2. dColorTC: Diferencia vertical (Techo vs Centro/Mesa).
-            //    La cámara mira desde arriba hacia abajo en ángulo picado, por lo que la perspectiva y los reflejos
-            //    generan un gradiente vertical físico de hasta 50-80 incluso en pantalla estática.
             int dColorTC = abs(supR - cenR) + abs(supG - cenG) + abs(supB - cenB);
             spatialContrast = std::max(dColorLR, dColorTC);
 
             // Detección de Dinamismo y Dispersión Calibrada:
-            // La detección de vídeo real debe basarse en el eje horizontal simétrico (dColorLR >= 42),
-            // o en un contraste combinado, neutralizando el gradiente vertical de perspectiva:
-            bool isStrongVideo = (dColorLR >= 42 || (dColorLR >= 25 && dColorTC >= 55) || dColorTC >= 115);
-            bool isDynamicVideo = (dColorLR >= 25 && tempDelta >= 35);
-            bool isVideoActivity = (isStrongVideo || isDynamicVideo);
+            // 1. hasSpatialDiversity: Contraste multizona real (los lados opuestos tienen colores diferentes).
+            //    En estático puro o color fijo: dColorLR <= 10. En vídeo multizona: dColorLR >= 35..250.
+            bool hasSpatialDiversity = (dColorLR >= 35 || (dColorLR >= 20 && dColorTC >= 50) || dColorTC >= 100);
 
-            if (isStrongVideo) {
+            // 2. hasMotion: Dinamismo temporal continuo (el color cambia de fotograma a fotograma).
+            //    En estático puro con filtro mediana: tempDelta <= 12.
+            //    En vídeo real en movimiento: tempDelta >= 28.
+            bool hasMotion = (tempDelta >= 28);
+
+            // 3. isVideoActivity: Hay actividad si la imagen tiene contraste multizona O si se está moviendo en el tiempo.
+            bool isVideoActivity = (hasSpatialDiversity || hasMotion);
+
+            // 4. isTrulyStatic: Una imagen es estática SOLO si NO tiene contraste multizona Y NO se está moviendo.
+            //    Si la imagen está cambiando de color en el tiempo (tempDelta > 15), NUNCA es estática.
+            bool isTrulyStatic = (!hasSpatialDiversity && tempDelta <= 15);
+
+            if (hasSpatialDiversity) {
               consecutiveStrongVideoFrames++;
             } else {
               if (consecutiveStrongVideoFrames > 0) consecutiveStrongVideoFrames--;
@@ -587,16 +589,19 @@ interval:
 
             if (isVideoActivity) {
               consecutiveVideoFrames++;
-              consecutiveStaticFrames = 0;
               if (consecutiveVideoFrames >= 3) {
                 lastVideoActivityTime = now;
               }
             } else {
-              // Modo Lámpara / Color fijo (inmóvil o uniforme en todo el perímetro)
-              consecutiveStaticFrames++;
               if (consecutiveVideoFrames > 0) {
                 consecutiveVideoFrames--;
               }
+            }
+
+            if (isTrulyStatic) {
+              consecutiveStaticFrames++;
+            } else {
+              consecutiveStaticFrames = 0;
             }
           }
 
@@ -621,8 +626,9 @@ interval:
             if (consecutiveBlackFrames >= 25) {
               // Pantalla/tira apagada en negro durante ~1.0s -> Standby
               targetCandidate = "Standby";
-            } else if (consecutiveStrongVideoFrames >= 12 || consecutiveVideoFrames >= 25) {
-              // Con 12 frames (~480ms) de contraste multizona real (dColorLR >= 42) conmuta a Vídeo
+            } else if (consecutiveStrongVideoFrames >= 12 || consecutiveVideoFrames >= 35) {
+              // Con 12 frames (~480ms) de contraste multizona O 35 frames (~1.4s) de movimiento continuo conmuta a Vídeo.
+              // Un toque de color en la app Govee cambia en solo 1..2 frames, por lo que nunca alcanza 35 frames.
               targetCandidate = "Vídeo";
             }
           } else if (currentMode == "Vídeo") {
@@ -630,8 +636,9 @@ interval:
             if (consecutiveBlackFrames >= 25) {
               // ~1.0s de negro absoluto sostenido -> Standby
               targetCandidate = "Standby";
-            } else if (consecutiveStaticFrames >= 50 && (now - lastVideoActivityTime >= 2000)) {
-              // Con 2.0s (50 frames a 40ms) de uniformidad perimetral o quietud conmuta a Estático
+            } else if (consecutiveStaticFrames >= 70 && (now - lastVideoActivityTime >= 2800)) {
+              // Exige 2.8s (70 frames a 40ms) de INMOVILIDAD TOTAL CONTINUA (sin contraste y tempDelta <= 15)
+              // para pasar a Estático. Si una escena de vídeo se mueve, nunca conmuta a Estático.
               targetCandidate = "Estático";
             }
           }
