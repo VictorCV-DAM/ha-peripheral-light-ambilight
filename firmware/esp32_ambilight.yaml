@@ -305,7 +305,7 @@ interval:
           static uint32_t lastFrameInterval = 0;
           static bool currentSignalActive = false;
           static std::string currentMode = "Standby";
-          static std::string previousActiveMode = "Estático";
+          static std::string previousActiveMode = "Vídeo";
           static int consecutiveVideoFrames = 0;
           static int consecutiveStaticFrames = 0;
           static int consecutiveStrongVideoFrames = 0;
@@ -593,6 +593,7 @@ interval:
           static uint32_t lastUniformChangeTime = 0;
           int spatialContrast = 0;
           bool isPerimeterUniform = false;
+          int dFromStaticRef = 0;
 
           if (isTransientBlackDrop) {
             // Ignorar micro-corte de 1..2 frames sin destruir sF ni vF
@@ -622,7 +623,7 @@ interval:
             if (staticRefR < 0 || consecutiveStaticFrames == 0) {
               staticRefR = izqR; staticRefG = izqG; staticRefB = izqB;
             }
-            int dFromStaticRef = abs(izqR - staticRefR) + abs(izqG - staticRefG) + abs(izqB - staticRefB);
+            dFromStaticRef = abs(izqR - staticRefR) + abs(izqG - staticRefG) + abs(izqB - staticRefB);
 
             // 5. hasHeadMotion: Cambio dinámico real en los primeros 18 LEDs (IZQ + SUP).
             bool hasHeadMotion = (headDelta >= 22 || (deltaIzq >= 12 && deltaSup >= 12));
@@ -676,11 +677,12 @@ interval:
           std::string targetCandidate = currentMode;
 
           if (currentMode == "Standby") {
-            // Salida de Standby al detectar luz/señal continua en la cabeza de la tira (>25 frames ~1.0s):
-            if (!isBlack && consecutiveAwakeFrames >= 25) {
-              if (consecutiveStrongVideoFrames >= 12 || consecutiveVideoFrames >= 16) {
+            // Salida de Standby al detectar luz/señal continua en la cabeza de la tira (>20 frames ~800ms):
+            if (!isBlack && consecutiveAwakeFrames >= 20) {
+              if (consecutiveStrongVideoFrames >= 8 || consecutiveVideoFrames >= 10) {
                 targetCandidate = "Vídeo";
-              } else if (isPerimeterUniform && consecutiveStaticFrames >= 15) {
+              } else if (isPerimeterUniform && consecutiveStaticFrames >= 25 && dFromStaticRef <= 8 && tempDelta <= 6) {
+                // Solo si la tira está 100% congelada y sin cambios de escena entra a Estático
                 targetCandidate = "Estático";
               } else {
                 targetCandidate = previousActiveMode;
@@ -691,10 +693,10 @@ interval:
             if (consecutiveBlackFrames >= 100) {
               // Pantalla/tira apagada en negro durante ~4.0s -> Standby
               targetCandidate = "Standby";
-            } else if (consecutiveStrongVideoFrames >= 30 || consecutiveVideoFrames >= 35) {
-              // Conmuta a Vídeo ante ~1.2s..1.4s de actividad de vídeo sostenida.
-              // En modo Vídeo full_screen: true, las escenas cambian continuamente con dt>50 alcanzando el umbral.
-              // Cambiar de color estático una vez en la app Govee dura solo ~0.3s y decae a 0 de inmediato.
+            } else if (consecutiveStrongVideoFrames >= 20 || consecutiveVideoFrames >= 22) {
+              // Conmuta a Vídeo ante ~0.8s..0.9s de actividad de vídeo sostenida.
+              // En modo Vídeo full_screen: true, las escenas cambian con dt>12 alcanzando 20 frames rápidamente.
+              // Cambiar de color estático una vez en la app Govee dura solo ~0.3s (7 frames) y decae a 0 de inmediato.
               targetCandidate = "Vídeo";
             }
           } else if (currentMode == "Vídeo") {
