@@ -363,33 +363,36 @@ interval:
           };
 
           // WS2811 GRB: Byte 0 = G, Byte 1 = R, Byte 2 = B
-          // Media recortada (trimmed mean) por zona: descarta el mínimo y máximo de cada borde
-          // para inmunizar las zonas frente a LEDs individuales con bits desplazados por ruido de 50Hz sin GND.
+          // Mediana espacial por zona (promedia los 3 LEDs centrales tras ordenar cada borde):
+          // En IZQ/DER (7 LEDs) descarta los 2 mínimos y 2 máximos; en SUP/CEN (11 LEDs) descarta
+          // los 4 mínimos y 4 máximos, inmunizando cada zona aunque 2..4 LEDs sufran bit-slip de 50Hz.
           auto calcZoneTrimmed = [&](int startVirt, int count, int &outR, int &outG, int &outB) {
             if (count <= 0) { outR = 0; outG = 0; outB = 0; return; }
-            long sR = 0, sG = 0, sB = 0;
-            int minR = 255, maxR = 0, minG = 255, maxG = 0, minB = 255, maxB = 0;
-            for (int i = startVirt; i < startVirt + count; i++) {
-              int k = getLedIndex(i);
-              int g = ledData[k * 3 + 0];
-              int r = ledData[k * 3 + 1];
-              int b = ledData[k * 3 + 2];
-              sR += r; sG += g; sB += b;
-              if (r < minR) minR = r;
-              if (r > maxR) maxR = r;
-              if (g < minG) minG = g;
-              if (g > maxG) maxG = g;
-              if (b < minB) minB = b;
-              if (b > maxB) maxB = b;
+            int rArr[36], gArr[36], bArr[36];
+            int n = std::min(count, 36);
+            for (int i = 0; i < n; i++) {
+              int k = getLedIndex(startVirt + i);
+              gArr[i] = ledData[k * 3 + 0];
+              rArr[i] = ledData[k * 3 + 1];
+              bArr[i] = ledData[k * 3 + 2];
             }
-            if (count >= 4) {
-              outR = (sR - minR - maxR) / (count - 2);
-              outG = (sG - minG - maxG) / (count - 2);
-              outB = (sB - minB - maxB) / (count - 2);
+            std::sort(rArr, rArr + n);
+            std::sort(gArr, gArr + n);
+            std::sort(bArr, bArr + n);
+            if (n >= 5) {
+              int mid = n / 2;
+              outR = (rArr[mid - 1] + rArr[mid] + rArr[mid + 1]) / 3;
+              outG = (gArr[mid - 1] + gArr[mid] + gArr[mid + 1]) / 3;
+              outB = (bArr[mid - 1] + bArr[mid] + bArr[mid + 1]) / 3;
+            } else if (n >= 3) {
+              int mid = n / 2;
+              outR = rArr[mid];
+              outG = gArr[mid];
+              outB = bArr[mid];
             } else {
-              outR = sR / count;
-              outG = sG / count;
-              outB = sB / count;
+              outR = rArr[0];
+              outG = gArr[0];
+              outB = bArr[0];
             }
           };
 
@@ -450,8 +453,16 @@ interval:
 
           // Detección del estado real del hardware (Vídeo vs Estático vs Standby) ANTES de smoothRedPurity
           // para no aplastar la dispersión real de cámara en escenas cálidas/rojas de vídeo:
-          int maxOverall = std::max({izqR, izqG, izqB, supR, supG, supB, derR, derG, derB, cenR, cenG, cenB});
-          bool isBlack = (maxOverall <= 4);
+          int maxHead = std::max({izqR, izqG, izqB, supR, supG, supB});
+          int maxOverall = std::max({maxHead, derR, derG, derB, cenR, cenG, cenB});
+          // Si la cabeza de la tira (primeros 18 LEDs: IZQ + SUP) está completamente apagada (<= 6),
+          // cualquier valor residual en la cola (DER/CEN) es ruido de 50Hz sin GND con la tira en Standby:
+          if (maxHead <= 6) {
+            derR = 0; derG = 0; derB = 0;
+            cenR = 0; cenG = 0; cenB = 0;
+            maxOverall = maxHead;
+          }
+          bool isBlack = (maxOverall <= 6 || (currentMode == "Standby" && maxHead <= 14));
 
           // Dispersión cromática y espacial:
           // 1. rawSpread: diferencia directa de brillo y color entre bordes (milestone da7c289).
@@ -504,21 +515,32 @@ interval:
           int deltaCen = (prevRawCenR < 0) ? 0 : (abs(cenR - prevRawCenR) + abs(cenG - prevRawCenG) + abs(cenB - prevRawCenB));
 
           // Supresión física de bit-slip de cola WS2811 (sin GND):
-          // Los primeros 18 LEDs tras el pulso de reset (>60us) son IZQ (LEDs 1..7) y SUP (LEDs 8..18).
-          // En modo Estático real (ej. task-12831), IZQ y SUP son 100% estables e idénticos (dColorIS <= 14, deltaIzq <= 6, deltaSup <= 6),
-          // mientras que CEN (LEDs 26..36, al final del paquete de 1.11ms) y ocasionalmente DER sufren desplazamiento de bits.
+          // Los primeros 7 LEDs tras el pulso de reset (>60us, 0..210us) son IZQ (LEDs 1..7), seguidos de SUP (LEDs 8..18).
+          // En modo Estático real, IZQ permanece congelado (deltaIzq <= 6) mientras la onda de 50Hz puede desplazar bits
+          // en la cola (CEN/DER) o puntualmente en un borde intermedio.
           int dColorIS = abs(izqR - supR) + abs(izqG - supG) + abs(izqB - supB);
-          bool isHeadFrozenUniform = (!isBlack && prevRawIzqR >= 0 && dColorIS <= 14 && deltaIzq <= 6 && deltaSup <= 6);
+          int dCenToHead = abs(cenR - izqR) + abs(cenG - izqG) + abs(cenB - izqB);
+          int dDerToHead = abs(derR - izqR) + abs(derG - izqG) + abs(derB - izqB);
+          bool isHeadFrozenUniform = (!isBlack && prevRawIzqR >= 0 && dColorIS <= 16 && deltaIzq <= 6 && deltaSup <= 6);
+          bool isIzqDerFrozenUniform = (!isBlack && prevRawIzqR >= 0 && dDerToHead <= 16 && deltaIzq <= 6 && deltaDer <= 6);
           if (isHeadFrozenUniform) {
-            int dCenToHead = abs(cenR - izqR) + abs(cenG - izqG) + abs(cenB - izqB);
-            int dDerToHead = abs(derR - izqR) + abs(derG - izqG) + abs(derB - izqB);
-            if (dCenToHead >= 24 || deltaCen >= 20) {
+            if (dCenToHead >= 20 || deltaCen >= 16) {
               cenR = izqR; cenG = izqG; cenB = izqB;
               deltaCen = deltaIzq;
             }
-            if (dDerToHead >= 24 || deltaDer >= 20) {
+            if (dDerToHead >= 20 || deltaDer >= 16) {
               derR = izqR; derG = izqG; derB = izqB;
               deltaDer = deltaIzq;
+            }
+          } else if (isIzqDerFrozenUniform) {
+            if (dColorIS >= 20 || deltaSup >= 16) {
+              supR = izqR; supG = izqG; supB = izqB;
+              deltaSup = deltaIzq;
+              dColorIS = 0;
+            }
+            if (dCenToHead >= 20 || deltaCen >= 16) {
+              cenR = izqR; cenG = izqG; cenB = izqB;
+              deltaCen = deltaIzq;
             }
           }
 
@@ -553,7 +575,7 @@ interval:
             prevRawCenR = cenR; prevRawCenG = cenG; prevRawCenB = cenB;
           }
 
-          // Salida de Standby por señal activa sostenida (>300ms de datos válidos no-negro):
+          // Salida de Standby por señal activa sostenida en la cabeza de la tira (IZQ/SUP):
           static int consecutiveAwakeFrames = 0;
           if (isBlack) {
             consecutiveAwakeFrames = 0;
@@ -585,37 +607,39 @@ interval:
             isPerimeterUniform = (dColorIS <= 16 && dColorLR <= 20 && rawSpread <= 28);
 
             // 3. hasHeadMotion: Cambio dinámico real en los primeros 18 LEDs (IZQ + SUP).
-            //    Cubre el modo Vídeo full_screen: true (donde contrast=0 pero el color de toda la tira cambia con la TV)
-            //    y las transiciones de escena en vídeo.
-            bool hasHeadMotion = (headDelta >= 16 || (deltaIzq >= 10 && deltaSup >= 10));
+            //    Cubre el modo Vídeo full_screen: true y las transiciones de escena en vídeo,
+            //    ignorando atenuaciones lentas de brillo (low_brightness).
+            bool hasHeadMotion = (headDelta >= 22 || (deltaIzq >= 12 && deltaSup >= 12));
 
             // 4. isVideoActivity: Actividad de vídeo tanto multizona como pantalla completa.
             bool isVideoActivity = (hasSpatialDiversity || hasHeadMotion);
 
             // 5. isTrulyStatic: Perímetro uniforme y congelado en la cabeza de la tira (IZQ + SUP + DER).
-            bool isTrulyStatic = (dColorIS <= 12 && dColorLR <= 16 && headDelta <= 8 && tempDelta <= 14);
+            bool isTrulyStatic = (dColorIS <= 14 && dColorLR <= 18 && headDelta <= 8 && tempDelta <= 16);
 
             if (hasSpatialDiversity) {
               consecutiveStrongVideoFrames++;
             } else if (isTrulyStatic) {
-              if (consecutiveStrongVideoFrames > 0) consecutiveStrongVideoFrames--;
+              consecutiveStrongVideoFrames = std::max(0, consecutiveStrongVideoFrames - 3);
             }
             consecutiveStrongVideoFrames = std::min(consecutiveStrongVideoFrames, 100);
 
             if (isVideoActivity) {
-              consecutiveVideoFrames += (hasSpatialDiversity && hasHeadMotion) ? 2 : 1;
+              consecutiveVideoFrames++;
               if (consecutiveVideoFrames >= 8) {
                 lastVideoActivityTime = now;
               }
             } else if (isTrulyStatic) {
-              if (consecutiveVideoFrames > 0) {
-                consecutiveVideoFrames--;
-              }
+              consecutiveVideoFrames = std::max(0, consecutiveVideoFrames - 3);
             }
 
             if (isTrulyStatic) {
               consecutiveStaticFrames++;
-            } else if (isVideoActivity && consecutiveVideoFrames >= 12) {
+              if (consecutiveStaticFrames >= 12) {
+                consecutiveVideoFrames = 0;
+                consecutiveStrongVideoFrames = 0;
+              }
+            } else if (isVideoActivity && consecutiveVideoFrames >= 14) {
               consecutiveStaticFrames = 0;
             } else if (isVideoActivity) {
               consecutiveStaticFrames = std::max(0, consecutiveStaticFrames - 3);
@@ -630,9 +654,9 @@ interval:
           std::string targetCandidate = currentMode;
 
           if (currentMode == "Standby") {
-            // Salida de Standby al detectar luz/señal continua (>20 frames encendidos ~800ms):
-            if (!isBlack && consecutiveAwakeFrames >= 20) {
-              if (consecutiveStrongVideoFrames >= 10 || consecutiveVideoFrames >= 14) {
+            // Salida de Standby al detectar luz/señal continua en la cabeza de la tira (>25 frames ~1.0s):
+            if (!isBlack && consecutiveAwakeFrames >= 25) {
+              if (consecutiveStrongVideoFrames >= 12 || consecutiveVideoFrames >= 16) {
                 targetCandidate = "Vídeo";
               } else if (isPerimeterUniform && consecutiveStaticFrames >= 15) {
                 targetCandidate = "Estático";
@@ -645,9 +669,9 @@ interval:
             if (consecutiveBlackFrames >= 100) {
               // Pantalla/tira apagada en negro durante ~4.0s -> Standby
               targetCandidate = "Standby";
-            } else if (consecutiveStrongVideoFrames >= 16 || consecutiveVideoFrames >= 20) {
-              // Con ~0.7s..0.8s de actividad real en la cabeza de la tira (IZQ/SUP) conmuta a Vídeo.
-              // En Estático real, isHeadFrozenUniform suprime el bit-slip de cola (CEN/DER), manteniendo vF=0.
+            } else if (consecutiveStrongVideoFrames >= 35 || consecutiveVideoFrames >= 40) {
+              // Requiere ~1.4s..1.6s de actividad continua real (+1/frame) sin 12 frames limpios.
+              // Las ráfagas de batimiento de 50Hz sin GND duran a lo sumo 0.3s..0.5s y se borran (-3/frame) de inmediato.
               targetCandidate = "Vídeo";
             }
           } else if (currentMode == "Vídeo") {
