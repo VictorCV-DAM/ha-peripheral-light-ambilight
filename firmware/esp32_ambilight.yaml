@@ -528,9 +528,9 @@ interval:
             consecutiveBlackFrames = 0;
           }
 
-          // Si veníamos con señal encendida y cae a 0 durante solo 1..3 fotogramas (<160ms),
-          // es un micro-corte por oscilación de masa flotante (dt=512), NO un apagado real.
-          bool isTransientBlackDrop = (isBlack && consecutiveBlackFrames <= 3 && prevRawIzqR >= 0);
+          // Si veníamos con señal encendida y cae a 0 durante solo 1 fotograma (<50ms),
+          // es un micro-corte por oscilación de masa flotante, NO un apagado real.
+          bool isTransientBlackDrop = (isBlack && consecutiveBlackFrames <= 1 && prevRawIzqR >= 0);
 
           if (!isBlack) {
             prevRawIzqR = izqR; prevRawIzqG = izqG; prevRawIzqB = izqB;
@@ -565,11 +565,16 @@ interval:
 
             // Detección de Dinamismo y Dispersión Calibrada:
             // 1. isStrongVideo: Contraste espacial multizona real entre lados opuestos de la TV.
-            bool isStrongVideo = (spatialContrast >= 35);
+            //    En estático, la caída de tensión (IR drop) en la tira puede generar un gradiente de 30-40 en blanco/pasteles.
+            //    Por ello, el contraste multizona real debe ser >= 48 para no confundir la caída física con vídeo.
+            bool isStrongVideo = (spatialContrast >= 48);
 
-            // 2. isVideoActivity: Sensibilidad continua para retener el modo Vídeo una vez activo.
-            //    En estático puro con filtro de mediana: spatialContrast <= 6 y tempDelta <= 5.
-            bool isVideoActivity = (isStrongVideo || spatialContrast >= 20 || tempDelta >= 12);
+            // 2. isVideoMotion: Dinamismo temporal continuo (movimiento entre fotogramas sucesivos).
+            //    En estático puro, tempDelta <= 6. En vídeo real en movimiento, tempDelta >= 24.
+            bool isVideoMotion = (tempDelta >= 24);
+
+            // 3. isVideoActivity: Sensibilidad continua para retener el modo Vídeo una vez activo:
+            bool isVideoActivity = (isStrongVideo || isVideoMotion);
 
             if (isStrongVideo) {
               consecutiveStrongVideoFrames++;
@@ -684,27 +689,65 @@ interval:
             }
           };
 
-          if (fIzqR < 0) {
-            fIzqR = izqR; fIzqG = izqG; fIzqB = izqB;
-            fSupR = supR; fSupG = supG; fSupB = supB;
-            fCenR = cenR; fCenG = cenG; fCenB = cenB;
-            fDerR = derR; fDerG = derG; fDerB = derB;
+          // Detección de zonas en negro:
+          bool blackIzq = (izqR <= 6 && izqG <= 6 && izqB <= 6);
+          bool blackDer = (derR <= 6 && derG <= 6 && derB <= 6);
+          bool blackCen = (cenR <= 6 && cenG <= 6 && cenB <= 6);
+          bool blackSup = (supR <= 6 && supG <= 6 && supB <= 6);
+
+          if (id(modo_blackout).state) {
+            // En Blackout Mode activo: si la zona cae a negro, cae a 0 de inmediato (0ms de retraso)
+            // sin esperar a que el filtro IIR decaiga lentamente a lo largo de 20 fotogramas.
+            if (blackIzq) { fIzqR = 0; fIzqG = 0; fIzqB = 0; }
+            else {
+              fIzqR = (pIzqR <= 4) ? izqR : smoothAdaptive(fIzqR, izqR);
+              fIzqG = (pIzqG <= 4) ? izqG : smoothAdaptive(fIzqG, izqG);
+              fIzqB = (pIzqB <= 4) ? izqB : smoothAdaptive(fIzqB, izqB);
+            }
+
+            if (blackDer) { fDerR = 0; fDerG = 0; fDerB = 0; }
+            else {
+              fDerR = (pDerR <= 4) ? derR : smoothAdaptive(fDerR, derR);
+              fDerG = (pDerG <= 4) ? derG : smoothAdaptive(fDerG, derG);
+              fDerB = (pDerB <= 4) ? derB : smoothAdaptive(fDerB, derB);
+            }
+
+            if (blackCen) { fCenR = 0; fCenG = 0; fCenB = 0; }
+            else {
+              fCenR = (pCenR <= 4) ? cenR : smoothAdaptive(fCenR, cenR);
+              fCenG = (pCenG <= 4) ? cenG : smoothAdaptive(fCenG, cenG);
+              fCenB = (pCenB <= 4) ? cenB : smoothAdaptive(fCenB, cenB);
+            }
+
+            if (blackSup) { fSupR = 0; fSupG = 0; fSupB = 0; }
+            else {
+              fSupR = (pSupR <= 4) ? supR : smoothAdaptive(fSupR, supR);
+              fSupG = (pSupG <= 4) ? supG : smoothAdaptive(fSupG, supG);
+              fSupB = (pSupB <= 4) ? supB : smoothAdaptive(fSupB, supB);
+            }
           } else {
-            fIzqR = smoothAdaptive(fIzqR, izqR);
-            fIzqG = smoothAdaptive(fIzqG, izqG);
-            fIzqB = smoothAdaptive(fIzqB, izqB);
+            if (fIzqR < 0) {
+              fIzqR = izqR; fIzqG = izqG; fIzqB = izqB;
+              fSupR = supR; fSupG = supG; fSupB = supB;
+              fCenR = cenR; fCenG = cenG; fCenB = cenB;
+              fDerR = derR; fDerG = derG; fDerB = derB;
+            } else {
+              fIzqR = smoothAdaptive(fIzqR, izqR);
+              fIzqG = smoothAdaptive(fIzqG, izqG);
+              fIzqB = smoothAdaptive(fIzqB, izqB);
 
-            fSupR = smoothAdaptive(fSupR, supR);
-            fSupG = smoothAdaptive(fSupG, supG);
-            fSupB = smoothAdaptive(fSupB, supB);
+              fSupR = smoothAdaptive(fSupR, supR);
+              fSupG = smoothAdaptive(fSupG, supG);
+              fSupB = smoothAdaptive(fSupB, supB);
 
-            fCenR = smoothAdaptive(fCenR, cenR);
-            fCenG = smoothAdaptive(fCenG, cenG);
-            fCenB = smoothAdaptive(fCenB, cenB);
+              fCenR = smoothAdaptive(fCenR, cenR);
+              fCenG = smoothAdaptive(fCenG, cenG);
+              fCenB = smoothAdaptive(fCenB, cenB);
 
-            fDerR = smoothAdaptive(fDerR, derR);
-            fDerG = smoothAdaptive(fDerG, derG);
-            fDerB = smoothAdaptive(fDerB, derB);
+              fDerR = smoothAdaptive(fDerR, derR);
+              fDerG = smoothAdaptive(fDerG, derG);
+              fDerB = smoothAdaptive(fDerB, derB);
+            }
           }
 
           static uint32_t lastSendIzq = 0;
@@ -719,46 +762,55 @@ interval:
           float trans = id(velocidad_transicion).state;
           uint32_t minInterval = 100;
           if (trans > 0.01f) {
-            // El intervalo mínimo entre comandos debe superar el tiempo de transición (+40ms de margen)
-            // para que las bombillas Wi-Fi completen su ciclo de fundido antes de recibir el siguiente color,
-            // evitando interrupciones de PWM a mitad de camino que provocan parpadeos perceptibles.
             minInterval = (uint32_t)(trans * 1000.0f) + 40;
             if (minInterval < 100) minInterval = 100;
           }
 
           bool sentAny = false;
 
-          // Disparo ante cambios reales significativos (delta >= 18 o suma vectorial >= 28)
+          // Eventos de apagado en negro (Blackout en tiempo real):
+          bool isBlackTarget_izq = (fIzqR <= 4 && fIzqG <= 4 && fIzqB <= 4);
+          bool wasBlack_izq = (pIzqR <= 4 && pIzqG <= 4 && pIzqB <= 4);
+          bool blackoutEvent_izq = (id(modo_blackout).state && (isBlackTarget_izq != wasBlack_izq));
+
           int dR_izq = abs(fIzqR - pIzqR);
           int dG_izq = abs(fIzqG - pIzqG);
           int dB_izq = abs(fIzqB - pIzqB);
-          bool chgIzq = (dR_izq >= 18 || dG_izq >= 18 || dB_izq >= 18 || (dR_izq + dG_izq + dB_izq >= 28));
+          bool chgIzq = (dR_izq >= 18 || dG_izq >= 18 || dB_izq >= 18 || (dR_izq + dG_izq + dB_izq >= 28) || blackoutEvent_izq);
           if ((chgIzq || (force && (dR_izq >= 4 || dG_izq >= 4 || dB_izq >= 4))) &&
-              (now - lastSendIzq >= minInterval || (force && chgIzq))) {
+              (now - lastSendIzq >= minInterval || (force && chgIzq) || blackoutEvent_izq)) {
             id(enviar_color_ha)->execute("light.comedor_luces_izquierda", fIzqR, fIzqG, fIzqB, trans);
             pIzqR = fIzqR; pIzqG = fIzqG; pIzqB = fIzqB;
             lastSendIzq = now;
             sentAny = true;
           }
 
+          bool isBlackTarget_der = (fDerR <= 4 && fDerG <= 4 && fDerB <= 4);
+          bool wasBlack_der = (pDerR <= 4 && pDerG <= 4 && pDerB <= 4);
+          bool blackoutEvent_der = (id(modo_blackout).state && (isBlackTarget_der != wasBlack_der));
+
           int dR_der = abs(fDerR - pDerR);
           int dG_der = abs(fDerG - pDerG);
           int dB_der = abs(fDerB - pDerB);
-          bool chgDer = (dR_der >= 18 || dG_der >= 18 || dB_der >= 18 || (dR_der + dG_der + dB_der >= 28));
+          bool chgDer = (dR_der >= 18 || dG_der >= 18 || dB_der >= 18 || (dR_der + dG_der + dB_der >= 28) || blackoutEvent_der);
           if ((chgDer || (force && (dR_der >= 4 || dG_der >= 4 || dB_der >= 4))) &&
-              (now - lastSendDer >= minInterval || (force && chgDer))) {
+              (now - lastSendDer >= minInterval || (force && chgDer) || blackoutEvent_der)) {
             id(enviar_color_ha)->execute("light.comedor_luces_derecha", fDerR, fDerG, fDerB, trans);
             pDerR = fDerR; pDerG = fDerG; pDerB = fDerB;
             lastSendDer = now;
             sentAny = true;
           }
 
+          bool isBlackTarget_cen = (fCenR <= 4 && fCenG <= 4 && fCenB <= 4);
+          bool wasBlack_cen = (pCenR <= 4 && pCenG <= 4 && pCenB <= 4);
+          bool blackoutEvent_cen = (id(modo_blackout).state && (isBlackTarget_cen != wasBlack_cen));
+
           int dR_cen = abs(fCenR - pCenR);
           int dG_cen = abs(fCenG - pCenG);
           int dB_cen = abs(fCenB - pCenB);
-          bool chgCen = (dR_cen >= 18 || dG_cen >= 18 || dB_cen >= 18 || (dR_cen + dG_cen + dB_cen >= 28));
+          bool chgCen = (dR_cen >= 18 || dG_cen >= 18 || dB_cen >= 18 || (dR_cen + dG_cen + dB_cen >= 28) || blackoutEvent_cen);
           if ((chgCen || (force && (dR_cen >= 4 || dG_cen >= 4 || dB_cen >= 4))) &&
-              (now - lastSendCen >= minInterval || (force && chgCen))) {
+              (now - lastSendCen >= minInterval || (force && chgCen) || blackoutEvent_cen)) {
             id(enviar_color_ha)->execute("light.comedor_luces_centro", fCenR, fCenG, fCenB, trans);
             pCenR = fCenR; pCenG = fCenG; pCenB = fCenB;
             lastSendCen = now;
@@ -766,12 +818,16 @@ interval:
           }
 
           if (id(activar_techo).state) {
+            bool isBlackTarget_sup = (fSupR <= 4 && fSupG <= 4 && fSupB <= 4);
+            bool wasBlack_sup = (pSupR <= 4 && pSupG <= 4 && pSupB <= 4);
+            bool blackoutEvent_sup = (id(modo_blackout).state && (isBlackTarget_sup != wasBlack_sup));
+
             int dR_sup = abs(fSupR - pSupR);
             int dG_sup = abs(fSupG - pSupG);
             int dB_sup = abs(fSupB - pSupB);
-            bool chgSup = (dR_sup >= 18 || dG_sup >= 18 || dB_sup >= 18 || (dR_sup + dG_sup + dB_sup >= 28));
+            bool chgSup = (dR_sup >= 18 || dG_sup >= 18 || dB_sup >= 18 || (dR_sup + dG_sup + dB_sup >= 28) || blackoutEvent_sup);
             if ((chgSup || (force && (dR_sup >= 4 || dG_sup >= 4 || dB_sup >= 4))) &&
-                (now - lastSendSup >= minInterval || (force && chgSup))) {
+                (now - lastSendSup >= minInterval || (force && chgSup) || blackoutEvent_sup)) {
               id(enviar_color_ha)->execute("light.comedor_luces_techo", fSupR, fSupG, fSupB, trans);
               pSupR = fSupR; pSupG = fSupG; pSupB = fSupB;
               lastSendSup = now;
