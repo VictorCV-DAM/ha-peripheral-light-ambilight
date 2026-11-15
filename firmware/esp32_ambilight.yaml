@@ -570,9 +570,9 @@ interval:
             //    En estático puro o color fijo: dColorLR <= 10. En vídeo multizona: dColorLR >= 35..250.
             bool hasSpatialDiversity = (dColorLR >= 35 || (dColorLR >= 20 && dColorTC >= 50) || dColorTC >= 100);
 
-            // 2. isPerimeterUniform: El perímetro es homogéneo (todas las zonas tienen el mismo tono).
-            //    En modo Estático/Color de la app Govee, todos los lados son idénticos.
-            isPerimeterUniform = (dColorLR < 20 && dColorTC < 35);
+            // 2. isPerimeterUniform: El perímetro es 100% homogéneo y congelado a nivel de hardware.
+            //    En modo Color/Estático de la app Govee, todos los 36 LEDs tienen el mismo color y cero ruido de cámara (rawSpread <= 10 y tempDelta <= 10).
+            isPerimeterUniform = (rawSpread <= 10 && tempDelta <= 10);
 
             // 3. hasMotion: Movimiento temporal continuo.
             //    CRÍTICO: Si el perímetro es uniforme (spatialContrast < 20), cualquier cambio temporal
@@ -583,7 +583,7 @@ interval:
             // 4. isVideoActivity: Hay actividad si hay contraste espacial multizona O movimiento con contraste.
             bool isVideoActivity = (hasSpatialDiversity || hasMotion);
 
-            // 5. isTrulyStatic: Es estático si el perímetro se mantiene uniforme.
+            // 5. isTrulyStatic: Es estático si el perímetro se mantiene uniforme y congelado.
             bool isTrulyStatic = isPerimeterUniform;
 
             if (hasSpatialDiversity) {
@@ -613,7 +613,7 @@ interval:
 
           // Evitar desbordamiento de contadores:
           consecutiveVideoFrames = std::min(consecutiveVideoFrames, 100);
-          consecutiveStaticFrames = std::min(consecutiveStaticFrames, 300);
+          consecutiveStaticFrames = std::min(consecutiveStaticFrames, 600);
           consecutiveBlackFrames = std::min(consecutiveBlackFrames, 150);
 
           std::string targetCandidate = currentMode;
@@ -644,10 +644,11 @@ interval:
             if (consecutiveBlackFrames >= 100) {
               // ~4.0s de negro absoluto sostenido -> Standby
               targetCandidate = "Standby";
-            } else if (consecutiveStaticFrames >= 75 && (now - lastVideoActivityTime >= 3000)) {
-              // Transición a Estático: 3.0s (75 frames a 40ms) de perímetro 100% uniforme.
-              // Rápido y reactivo al cambiar a modo color en la app Govee,
-              // e inmune a pausas cortas o destellos en películas.
+            } else if (consecutiveStaticFrames >= 500 && (now - lastVideoActivityTime >= 20000)) {
+              // Transición a Estático: exige 20.0s (500 frames) continuos de congelamiento total
+              // en todos los 36 LEDs (rawSpread <= 10 y tempDelta <= 10).
+              // Físicamente IMPOSIBLE de alcanzar durante una película o programa de TV,
+              // blindando el modo Vídeo para que NUNCA vuelva a caer a Estático mientras ves la tele.
               targetCandidate = "Estático";
             }
           }
@@ -710,11 +711,11 @@ interval:
             }
           };
 
-          // Detección de zonas en negro:
-          bool blackIzq = (izqR <= 6 && izqG <= 6 && izqB <= 6);
-          bool blackDer = (derR <= 6 && derG <= 6 && derB <= 6);
-          bool blackCen = (cenR <= 6 && cenG <= 6 && cenB <= 6);
-          bool blackSup = (supR <= 6 && supG <= 6 && supB <= 6);
+          // Detección de zonas en negro (calibrada para sesgo óptico de cámara en escenas oscuras):
+          bool blackIzq = (izqR <= 14 && izqG <= 14 && izqB <= 14);
+          bool blackDer = (derR <= 14 && derG <= 14 && derB <= 14);
+          bool blackCen = (cenR <= 14 && cenG <= 14 && cenB <= 14);
+          bool blackSup = (supR <= 14 && supG <= 14 && supB <= 14);
 
           if (id(modo_blackout).state) {
             // En Blackout Mode activo: si la zona cae a negro, cae a 0 de inmediato (0ms de retraso)
