@@ -486,15 +486,18 @@ interval:
             if (consecutiveVideoFrames > 0) consecutiveVideoFrames--;
             if (consecutiveStaticFrames > 0) consecutiveStaticFrames--;
           } else {
+            // Contraste espacial perimetral directo (Izquierda vs Derecha, Techo vs Centro):
+            int dColorLR = abs(izqR - derR) + abs(izqG - derG) + abs(izqB - derB);
+            int dColorTC = abs(supR - cenR) + abs(supG - cenG) + abs(supB - cenB);
+            int spatialContrast = std::max(dColorLR, dColorTC);
+
             // Detección de Dinamismo y Dispersión Calibrada:
-            // 1. isStrongVideo: Contraste espacial multizona real entre los bordes de la TV.
-            //    En color estático (lámpara), la caída de tensión en la tira de 37 LEDs genera un spread natural de 15..35.
-            //    Por tanto, el umbral de vídeo real multizona se establece en rawSpread >= 55 o chromaSpread >= 45.
-            bool isStrongVideo = (rawSpread >= 55 || chromaSpread >= 45);
+            // 1. isStrongVideo: Contraste espacial multizona real entre lados opuestos de la TV.
+            //    En modo lámpara (incluso con caída de tensión resistiva), dColorLR < 20 y dColorTC < 20.
+            bool isStrongVideo = (spatialContrast >= 45 || totalSpread >= 50);
 
             // 2. isVideoActivity: Detección de actividad real de vídeo (espacial o temporal genuina).
-            //    Filtra la caída de tensión y el ruido de masa flotante en cable único sin GND.
-            bool isVideoActivity = (isStrongVideo || totalSpread >= 40 || chromaSpread >= 35 || tempDelta >= 40 || (totalSpread >= 25 && tempDelta >= 25));
+            bool isVideoActivity = (isStrongVideo || spatialContrast >= 28 || totalSpread >= 35 || tempDelta >= 35);
 
             if (isStrongVideo) {
               consecutiveStrongVideoFrames++;
@@ -542,7 +545,7 @@ interval:
               // Pantalla/tira apagada en negro durante ~1.0s -> Standby
               targetCandidate = "Standby";
             } else if (consecutiveStrongVideoFrames >= 8) {
-              // Con 8 frames (~320ms) de contraste espacial multizona real (spread>=55) conmuta a Vídeo
+              // Con 8 frames (~320ms) de contraste espacial multizona real conmuta a Vídeo
               targetCandidate = "Vídeo";
             }
           } else if (currentMode == "Vídeo") {
@@ -550,8 +553,8 @@ interval:
             if (consecutiveBlackFrames >= 25) {
               // ~1.0s de negro absoluto sostenido -> Standby
               targetCandidate = "Standby";
-            } else if (consecutiveStaticFrames >= 75 && (now - lastVideoActivityTime >= 3000)) {
-              // Exige 3.0s (75 frames de 40ms) CONTINUOS de inmovilidad sin actividad de vídeo para pasar a Lámpara fija
+            } else if (consecutiveStaticFrames >= 50 && (now - lastVideoActivityTime >= 2000)) {
+              // Exige 2.0s (50 frames de 40ms) de predominancia estática sin vídeo genuino para pasar a Lámpara fija
               targetCandidate = "Estático";
             }
           }
@@ -591,32 +594,65 @@ interval:
             return;
           }
 
-          // Suavizado temporal IIR (75/25): elimina el parpadeo de +-10 del sensor de cámara en estático
-          // pero responde en el primer fotograma (40ms) ante cambios reales de escena.
+          // Suavizado temporal IIR (75/25) con Filtro de Rechazo de Glitches de 1-Frame (2-Frame Gate):
+          // En cable único sin GND, un pulso de ruido parásito altera a veces un único fotograma aislado.
+          // Si el salto es grande (>30), exige confirmación en 2 fotogramas consecutivos antes de actualizar
+          // la bombilla, eliminando por completo cualquier parpadeo o salto involuntario de tono.
           if (isTransientBlackDrop) {
             return;
           }
+
+          static int sIzqR = -1, sIzqG = -1, sIzqB = -1, cIzqR = -1, cIzqG = -1, cIzqB = -1;
+          static int sDerR = -1, sDerG = -1, sDerB = -1, cDerR = -1, cDerG = -1, cDerB = -1;
+          static int sCenR = -1, sCenG = -1, sCenB = -1, cCenR = -1, cCenG = -1, cCenB = -1;
+          static int sSupR = -1, sSupG = -1, sSupB = -1, cSupR = -1, cSupG = -1, cSupB = -1;
+
+          auto filterOutlier = [](int inR, int inG, int inB, int &sR, int &sG, int &sB, int &cR, int &cG, int &cB) {
+            if (sR < 0) {
+              sR = inR; sG = inG; sB = inB;
+              cR = inR; cG = inG; cB = inB;
+              return;
+            }
+            int diff = abs(inR - sR) + abs(inG - sG) + abs(inB - sB);
+            if (diff < 30) {
+              sR = inR; sG = inG; sB = inB;
+              cR = inR; cG = inG; cB = inB;
+            } else {
+              int cDiff = abs(inR - cR) + abs(inG - cG) + abs(inB - cB);
+              if (cDiff < 20) {
+                sR = inR; sG = inG; sB = inB;
+              } else {
+                cR = inR; cG = inG; cB = inB;
+              }
+            }
+          };
+
+          filterOutlier(izqR, izqG, izqB, sIzqR, sIzqG, sIzqB, cIzqR, cIzqG, cIzqB);
+          filterOutlier(derR, derG, derB, sDerR, sDerG, sDerB, cDerR, cDerG, cDerB);
+          filterOutlier(cenR, cenG, cenB, sCenR, sCenG, sCenB, cCenR, cCenG, cCenB);
+          filterOutlier(supR, supG, supB, sSupR, sSupG, sSupB, cSupR, cSupG, cSupB);
+
           if (fIzqR < 0) {
-            fIzqR = izqR; fIzqG = izqG; fIzqB = izqB;
-            fSupR = supR; fSupG = supG; fSupB = supB;
-            fCenR = cenR; fCenG = cenG; fCenB = cenB;
-            fDerR = derR; fDerG = derG; fDerB = derB;
+            fIzqR = sIzqR; fIzqG = sIzqG; fIzqB = sIzqB;
+            fSupR = sSupR; fSupG = sSupG; fSupB = sSupB;
+            fCenR = sCenR; fCenG = sCenG; fCenB = sCenB;
+            fDerR = sDerR; fDerG = sDerG; fDerB = sDerB;
           } else {
-            fIzqR = (fIzqR * 3 + izqR) / 4;
-            fIzqG = (fIzqG * 3 + izqG) / 4;
-            fIzqB = (fIzqB * 3 + izqB) / 4;
+            fIzqR = (fIzqR * 3 + sIzqR) / 4;
+            fIzqG = (fIzqG * 3 + sIzqG) / 4;
+            fIzqB = (fIzqB * 3 + sIzqB) / 4;
 
-            fSupR = (fSupR * 3 + supR) / 4;
-            fSupG = (fSupG * 3 + supG) / 4;
-            fSupB = (fSupB * 3 + supB) / 4;
+            fSupR = (fSupR * 3 + sSupR) / 4;
+            fSupG = (fSupG * 3 + sSupG) / 4;
+            fSupB = (fSupB * 3 + sSupB) / 4;
 
-            fCenR = (fCenR * 3 + cenR) / 4;
-            fCenG = (fCenG * 3 + cenG) / 4;
-            fCenB = (fCenB * 3 + cenB) / 4;
+            fCenR = (fCenR * 3 + sCenR) / 4;
+            fCenG = (fCenG * 3 + sCenG) / 4;
+            fCenB = (fCenB * 3 + sCenB) / 4;
 
-            fDerR = (fDerR * 3 + derR) / 4;
-            fDerG = (fDerG * 3 + derG) / 4;
-            fDerB = (fDerB * 3 + derB) / 4;
+            fDerR = (fDerR * 3 + sDerR) / 4;
+            fDerG = (fDerG * 3 + sDerG) / 4;
+            fDerB = (fDerB * 3 + sDerB) / 4;
           }
 
           static uint32_t lastSendIzq = 0;
