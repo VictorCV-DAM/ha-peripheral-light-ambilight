@@ -564,16 +564,17 @@ interval:
             spatialContrast = std::max(dColorLR, dColorTC);
 
             // Detección de Dinamismo y Dispersión Calibrada:
-            // 1. isStrongVideo: Contraste espacial multizona real entre lados opuestos de la TV (>= 48).
-            bool isStrongVideo = (spatialContrast >= 48);
+            // 1. isStrongVideo: Contraste espacial multizona real entre lados opuestos de la TV (>= 45).
+            bool isStrongVideo = (spatialContrast >= 45);
 
-            // 2. isDynamicVideo: Contraste espacial moderado (>= 28) combinado con dinamismo temporal real (tempDelta >= 60).
-            //    En estático puro o al cambiar de color/brillo en la app Govee, todos los LEDs cambian juntos:
-            //    spatialContrast es < 25 (típicamente 0..8), por lo que NUNCA se confunde con vídeo.
-            bool isDynamicVideo = (spatialContrast >= 28 && tempDelta >= 60);
+            // 2. isDynamicMotion: Dinamismo temporal continuo (movimiento sostenido en pantalla).
+            //    En estático puro con filtro mediana: tempDelta <= 10.
+            //    Al cambiar de color/brillo en la app Govee, el pico de dt dura solo 1..2 frames (<80ms).
+            //    En vídeo real o transiciones de color continuas: tempDelta >= 35.
+            bool isDynamicMotion = (tempDelta >= 35);
 
-            // 3. isVideoActivity: Actividad real de Ambilight multizona:
-            bool isVideoActivity = (isStrongVideo || isDynamicVideo);
+            // 3. isVideoActivity:
+            bool isVideoActivity = (isStrongVideo || isDynamicMotion);
 
             if (isStrongVideo) {
               consecutiveStrongVideoFrames++;
@@ -599,7 +600,7 @@ interval:
 
           // Evitar desbordamiento de contadores:
           consecutiveVideoFrames = std::min(consecutiveVideoFrames, 80);
-          consecutiveStaticFrames = std::min(consecutiveStaticFrames, 150);
+          consecutiveStaticFrames = std::min(consecutiveStaticFrames, 300);
           consecutiveBlackFrames = std::min(consecutiveBlackFrames, 50);
 
           std::string targetCandidate = currentMode;
@@ -607,7 +608,7 @@ interval:
           if (currentMode == "Standby") {
             // Salida instantánea de Standby al detectar luz/señal continua (>20 frames encendidos ~800ms):
             if (!isBlack && consecutiveAwakeFrames >= 20) {
-              if (consecutiveStrongVideoFrames >= 8 || consecutiveVideoFrames >= 25) {
+              if (consecutiveStrongVideoFrames >= 8 || consecutiveVideoFrames >= 20) {
                 targetCandidate = "Vídeo";
               } else {
                 targetCandidate = "Estático";
@@ -618,8 +619,9 @@ interval:
             if (consecutiveBlackFrames >= 25) {
               // Pantalla/tira apagada en negro durante ~1.0s -> Standby
               targetCandidate = "Standby";
-            } else if (consecutiveStrongVideoFrames >= 8 || consecutiveVideoFrames >= 30) {
-              // Con 8 frames (~320ms) de contraste multizona O 30 frames (~1.2s) de dinamismo continuo conmuta a Vídeo
+            } else if (consecutiveStrongVideoFrames >= 8 || consecutiveVideoFrames >= 25) {
+              // Con 8 frames (~320ms) de contraste multizona O 25 frames (~1.0s) de dinamismo continuo conmuta a Vídeo.
+              // Un toque de color en la app Govee dura solo 1..2 frames (80ms), por lo que nunca dispara Vídeo.
               targetCandidate = "Vídeo";
             }
           } else if (currentMode == "Vídeo") {
@@ -627,8 +629,9 @@ interval:
             if (consecutiveBlackFrames >= 25) {
               // ~1.0s de negro absoluto sostenido -> Standby
               targetCandidate = "Standby";
-            } else if (consecutiveStaticFrames >= 30 && (now - lastVideoActivityTime >= 1500)) {
-              // Con 1.2s (30 frames) de uniformidad perimetral o quietud conmuta a Estático
+            } else if (consecutiveStaticFrames >= 175 && (now - lastVideoActivityTime >= 7000)) {
+              // Histéresis cinematográfica: en una película un plano estático dura fácilmente 2..5s.
+              // Exige 7.0s (175 frames de 40ms) ininterrumpidos de quietud absoluta para pasar a Estático.
               targetCandidate = "Estático";
             }
           }
