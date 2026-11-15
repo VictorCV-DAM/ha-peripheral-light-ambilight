@@ -238,18 +238,17 @@ The Govee T1 camera box computes corners on-the-fly, introducing internal pauses
 * **Frame Format:** 37 LEDs total (1 preamble LED + 36 active perimeter LEDs: Left=7, Top=11, Right=7, Bottom=11).
 * **Color Encoding:** Native GRB order (Byte 0 = Green, Byte 1 = Red, Byte 2 = Blue).
 
-### 4. Digital Signal Processing: 75/25 IIR Filter, Outlier Gate & Temporal Hysteresis
-TV cameras inherently pick up $50/60\text{ Hz}$ room flicker and sensor noise. Without filtering, smart bulbs would flicker and flood Home Assistant:
-* **75/25 IIR Temporal Smoothing:**
-  $$F_{\text{new}} = \frac{3 \cdot F_{\text{prev}} + 1 \cdot \text{Raw}}{4}$$
-  Completely eliminates CMOS camera sensor jitter ($\pm 10$ LSB) while ensuring sub-40ms response on real scene transitions.
-* **2-Frame Outlier Confirmation Gate:** Rejects single-frame optical spikes and HDMI sync anomalies $(> 25\text{ points})$ unless confirmed by a consecutive frame.
-* **12-Point Noise Deadband & 15s Heartbeat:** State updates are dispatched to Home Assistant only when real changes exceed $\Delta \ge 12$ points in any RGB channel, backed by an automatic 15-second keep-alive heartbeat.
-* **Asymmetric Barrier State Machine (100% Rock-Solid Stability Milestone):**
-  A revolutionary state engine specifically engineered for a **single jumper wire tap without common ground (GND)**:
-  - **Vídeo Retention:** Evaluates 4 perimeter zones (Left, Top, Right, Center) and applies an asymmetric leaky bucket with continuous activity retention. Movies with long still frames, dark pauses, or uniform backgrounds never falsely degrade to static.
-  - **Estático (Solid Color / Lamp) Immunity:** Transitioning from `Estático` to `Vídeo` strictly requires sustained spatial chromatic spread across TV borders ($\text{totalSpread} \ge 26$ or $\text{chromaSpread} \ge 22$) for $\ge 10$ frames ($\sim 400\text{ ms}$). Single-wire floating noise (which has $\text{spread} = 0$) and fast color changes/palette dragging in the Govee app can never falsely trigger Video mode.
-  - **Standby Detection:** Detects sustained bus silence or full black ($> 1.2\text{ s}$) with transient drop immunity against 50Hz AC float. Verified with 100% autonomous testing stability (0 bounces).
+### 4. Digital Signal Processing: Spatial + 5-Tap Temporal Median, Head-of-Frame Anchor & Coherent State Engine (v1.4.0 Milestone)
+TV cameras and single-wire WS2811 taps without a common ground (GND) face two distinct challenges: CMOS sensor jitter and $50/60\text{ Hz}$ floating-ground beat interference across the $1.11\text{ ms}$ WS2811 packet. Version `v1.4.0` introduces a 4-pillar DSP architecture:
+* **Per-Edge Spatial Median (`calcZoneTrimmed`) + Permanent 5-Tap Temporal Median (`median5`):**
+  Each border (`IZQ` 7 LEDs, `SUP` 11 LEDs, `DER` 7 LEDs, `CEN` 11 LEDs) sorts its raw LED values every frame and averages only the **3 central LEDs** (discarding the 4 lowest and 4 highest LEDs in 11-LED zones and the 2 lowest/highest in 7-LED zones), followed by a continuous **5-frame ($200\text{ ms}$) temporal median filter** that stays active 24/7 even when `switch.1_ambilight_mode` is turned off.
+* **Physical WS2811 Head-of-Frame Anchor (`isHeadFrozenUniform` & `isIzqDerFrozenUniform`):**
+  Exploits WS2811 timing physics: the first LEDs transmitted immediately after the $>60\ \mu\text{s}$ LOW reset pulse (`IZQ`, $0\text{--}210\ \mu\text{s}$) are phase-locked to the signal reference, whereas tail LEDs (`CEN`, $750\text{--}1080\ \mu\text{s}$) experience the largest $50\text{ Hz}$ ground drift. When the head of the strip is uniform and frozen ($\Delta \le 6$), any transient bit-slip in the tail is automatically clamped to the head reference.
+* **Coherent Full-Strip Motion & Drift Reference (`isCoherentFullStripMotion` & `staticRef` / `staticAnchor`):**
+  Supports both **Multi-Zone Video (`Part`)** and **Full-Screen Video (`full_screen: true` / `Todo`)** where all 36 LEDs share the same color ($\text{contrast} = 0$):
+  - **Video Retention (`Vídeo`):** Immediately resets the static counter (`sF = 0`) on multi-zone contrast, coherent full-strip transitions ($\text{contrast} \le 12$ with $\Delta t \ge 12$ across all 4 zones in lockstep), or cumulative chromatic/brightness drift ($\ge 14$ points from `staticRef`), preventing false drops to `Estático` during movies.
+  - **Static Immunity (`Estático`):** Uses an asymmetric leaky bucket ($+1\text{/frame}$ increment, $-3\text{/frame}$ fast decay, hard reset after $0.48\text{ s}$ static) and `staticAnchor` verification so $50\text{ Hz}$ beat sweeps ($0.3\text{--}0.5\text{ s}$) are completely drained with zero residual accumulation.
+  - **Head-Verified Standby & Real-Time Blackout:** Wakes from `Standby` only on sustained head-of-strip illumination (`maxHead > 6` for $\ge 1.0\text{ s}$) and turns off room zones with $0.0\text{ s}$ instant transition when dark scenes hit Govee's `low_brightness` floor.
 
 ---
 
