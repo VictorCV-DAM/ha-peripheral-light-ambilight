@@ -624,41 +624,24 @@ interval:
             }
             int dFromStaticRef = abs(izqR - staticRefR) + abs(izqG - staticRefG) + abs(izqB - staticRefB);
 
-            // Ancla del modo Estático para detectar cambios sucesivos de escena en full_screen: true sin falsos positivos:
-            if (staticAnchorR < 0 || currentMode != "Estático") {
-              staticAnchorR = izqR; staticAnchorG = izqG; staticAnchorB = izqB;
-              uniformShiftFrames = 0;
-              uniformColorChanges = 0;
-            } else {
-              if (now - lastUniformChangeTime > 30000) {
-                uniformColorChanges = 0;
-              }
-              int dFromAnchor = abs(izqR - staticAnchorR) + abs(izqG - staticAnchorG) + abs(izqB - staticAnchorB);
-              if (spatialContrast <= 12 && rawSpread <= 16 && dFromAnchor >= 16) {
-                uniformShiftFrames++;
-                if (uniformShiftFrames >= 4) {
-                  uniformColorChanges++;
-                  lastUniformChangeTime = now;
-                  staticAnchorR = izqR; staticAnchorG = izqG; staticAnchorB = izqB;
-                  uniformShiftFrames = 0;
-                }
-              } else {
-                uniformShiftFrames = 0;
-              }
-            }
-
-            // 5. hasHeadMotion: Cambio dinámico fuerte en los primeros 18 LEDs (IZQ + SUP).
+            // 5. hasHeadMotion: Cambio dinámico real en los primeros 18 LEDs (IZQ + SUP).
+            //    En modo Estático, cambiar de color (ej. rojo -> azul) cambia toda la tira al unísono con contrast=0.
+            //    hasHeadMotion solo se considera actividad de vídeo si viene acompañado de contraste espacial (Vídeo multizona)
+            //    o si ya estamos en modo Vídeo (movimiento de cámara/cambios continuos de escena).
             bool hasHeadMotion = (headDelta >= 22 || (deltaIzq >= 12 && deltaSup >= 12));
 
-            // 6. isVideoActivity: Actividad de vídeo tanto multizona como pantalla completa.
-            bool isVideoActivity = (hasSpatialDiversity || hasHeadMotion);
+            // 6. isVideoActivity:
+            //    - Estando en Estático: SOLO el contraste espacial multizona real (hasSpatialDiversity) se considera vídeo inmediato.
+            //      Los cambios de color uniforme (cambiar la lámpara de color en la app Govee) mantienen contrast=0 y NO suman vF.
+            //    - Estando en Vídeo: el movimiento temporal también cuenta para no perder planos tranquilos de full_screen: true.
+            bool isVideoActivity = (currentMode == "Estático") ? hasSpatialDiversity : (hasSpatialDiversity || hasHeadMotion);
 
             // 7. isTrulyStatic: Perímetro uniforme, congelado frame a frame y sin deriva respecto a staticRef:
             bool isTrulyStatic = (dColorIS <= 14 && dColorLR <= 18 && headDelta <= 8 && tempDelta <= 12 && dFromStaticRef <= 12);
 
             if (hasSpatialDiversity) {
               consecutiveStrongVideoFrames++;
-            } else if (isTrulyStatic) {
+            } else if (isTrulyStatic || isPerimeterUniform) {
               consecutiveStrongVideoFrames = std::max(0, consecutiveStrongVideoFrames - 3);
             }
             consecutiveStrongVideoFrames = std::min(consecutiveStrongVideoFrames, 100);
@@ -668,7 +651,7 @@ interval:
               if (consecutiveVideoFrames >= 8) {
                 lastVideoActivityTime = now;
               }
-            } else if (isTrulyStatic) {
+            } else if (isTrulyStatic || isPerimeterUniform) {
               consecutiveVideoFrames = std::max(0, consecutiveVideoFrames - 3);
             }
 
@@ -713,9 +696,10 @@ interval:
             if (consecutiveBlackFrames >= 100) {
               // Pantalla/tira apagada en negro durante ~4.0s -> Standby
               targetCandidate = "Standby";
-            } else if (consecutiveStrongVideoFrames >= 35 || consecutiveVideoFrames >= 40 || uniformColorChanges >= 2) {
-              // Conmuta a Vídeo ante ~1.4s..1.6s de actividad multizona/dinámica continua,
-              // o ante >=2 cambios uniformes verificados de color en toda la tira (modo Vídeo full_screen: true).
+            } else if (consecutiveStrongVideoFrames >= 35 || consecutiveVideoFrames >= 40) {
+              // Conmuta a Vídeo ante ~1.4s..1.6s de contraste espacial multizona real (hasSpatialDiversity).
+              // Cambiar de color estático en la app Govee (arrastrar la rueda de color) tiene contrast=0 en toda la tira
+              // y se mantiene 100% en Estático sin saltar a Vídeo.
               targetCandidate = "Vídeo";
             }
           } else if (currentMode == "Vídeo") {
