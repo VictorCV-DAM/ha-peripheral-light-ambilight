@@ -275,16 +275,24 @@ interval:
           static int pCenR = -1, pCenG = -1, pCenB = -1;
           static int pDerR = -1, pDerG = -1, pDerB = -1;
 
-          auto median3 = [](int a, int b, int c) -> int {
-            if ((a <= b && b <= c) || (c <= b && b <= a)) return b;
-            if ((b <= a && a <= c) || (c <= a && a <= b)) return a;
-            return c;
+          auto median5 = [](int a, int b, int c, int d, int e) -> int {
+            int v[5] = {a, b, c, d, e};
+            for (int i = 0; i < 3; i++) {
+              for (int j = i + 1; j < 5; j++) {
+                if (v[j] < v[i]) {
+                  int tmp = v[i];
+                  v[i] = v[j];
+                  v[j] = tmp;
+                }
+              }
+            }
+            return v[2];
           };
 
-          static int hIzqR[3] = {-1, -1, -1}, hIzqG[3] = {-1, -1, -1}, hIzqB[3] = {-1, -1, -1};
-          static int hSupR[3] = {-1, -1, -1}, hSupG[3] = {-1, -1, -1}, hSupB[3] = {-1, -1, -1};
-          static int hDerR[3] = {-1, -1, -1}, hDerG[3] = {-1, -1, -1}, hDerB[3] = {-1, -1, -1};
-          static int hCenR[3] = {-1, -1, -1}, hCenG[3] = {-1, -1, -1}, hCenB[3] = {-1, -1, -1};
+          static int hIzqR[5] = {-1, -1, -1, -1, -1}, hIzqG[5] = {-1, -1, -1, -1, -1}, hIzqB[5] = {-1, -1, -1, -1, -1};
+          static int hSupR[5] = {-1, -1, -1, -1, -1}, hSupG[5] = {-1, -1, -1, -1, -1}, hSupB[5] = {-1, -1, -1, -1, -1};
+          static int hDerR[5] = {-1, -1, -1, -1, -1}, hDerG[5] = {-1, -1, -1, -1, -1}, hDerB[5] = {-1, -1, -1, -1, -1};
+          static int hCenR[5] = {-1, -1, -1, -1, -1}, hCenG[5] = {-1, -1, -1, -1, -1}, hCenB[5] = {-1, -1, -1, -1, -1};
           static int hIdx = 0;
 
           static uint32_t tDiag = 0;
@@ -297,7 +305,7 @@ interval:
           static uint32_t lastFrameInterval = 0;
           static bool currentSignalActive = false;
           static std::string currentMode = "Standby";
-          static std::string previousActiveMode = "Vídeo";
+          static std::string previousActiveMode = "Estático";
           static int consecutiveVideoFrames = 0;
           static int consecutiveStaticFrames = 0;
           static int consecutiveStrongVideoFrames = 0;
@@ -408,13 +416,12 @@ interval:
           int cenG = sG_cen / nInf;
           int cenB = sB_cen / nInf;
 
-          // Filtrado de Mediana 3-Tap:
-          // En cable único sin GND, el ruido por oscilación capacitiva o armónicos de 50Hz altera a veces
-          // un único fotograma aislado. Un filtro de mediana de 3 muestras elimina con un 100% de eficacia
-          // cualquier salto, bit-flip o glitch transitorio de 1 frame, sin alterar la fidelidad cromática
-          // ni introducir desincronización entre zonas durante vídeo real:
+          // Filtrado de Mediana 5-Tap:
+          // En cable único sin GND, el batimiento entre los 50Hz de red y el muestreo de 25Hz (40ms)
+          // puede alterar hasta 2 fotogramas consecutivos. Un filtro de mediana de 5 muestras (200ms)
+          // elimina el 100% de las ráfagas transitorias de 1 y 2 fotogramas sin alterar la fidelidad cromática:
           if (hIzqR[0] < 0) {
-            for (int j = 0; j < 3; j++) {
+            for (int j = 0; j < 5; j++) {
               hIzqR[j] = izqR; hIzqG[j] = izqG; hIzqB[j] = izqB;
               hSupR[j] = supR; hSupG[j] = supG; hSupB[j] = supB;
               hDerR[j] = derR; hDerG[j] = derG; hDerB[j] = derB;
@@ -425,24 +432,24 @@ interval:
             hSupR[hIdx] = supR; hSupG[hIdx] = supG; hSupB[hIdx] = supB;
             hDerR[hIdx] = derR; hDerG[hIdx] = derG; hDerB[hIdx] = derB;
             hCenR[hIdx] = cenR; hCenG[hIdx] = cenG; hCenB[hIdx] = cenB;
-            hIdx = (hIdx + 1) % 3;
+            hIdx = (hIdx + 1) % 5;
           }
 
-          izqR = median3(hIzqR[0], hIzqR[1], hIzqR[2]);
-          izqG = median3(hIzqG[0], hIzqG[1], hIzqG[2]);
-          izqB = median3(hIzqB[0], hIzqB[1], hIzqB[2]);
+          izqR = median5(hIzqR[0], hIzqR[1], hIzqR[2], hIzqR[3], hIzqR[4]);
+          izqG = median5(hIzqG[0], hIzqG[1], hIzqG[2], hIzqG[3], hIzqG[4]);
+          izqB = median5(hIzqB[0], hIzqB[1], hIzqB[2], hIzqB[3], hIzqB[4]);
 
-          supR = median3(hSupR[0], hSupR[1], hSupR[2]);
-          supG = median3(hSupG[0], hSupG[1], hSupG[2]);
-          supB = median3(hSupB[0], hSupB[1], hSupB[2]);
+          supR = median5(hSupR[0], hSupR[1], hSupR[2], hSupR[3], hSupR[4]);
+          supG = median5(hSupG[0], hSupG[1], hSupG[2], hSupG[3], hSupG[4]);
+          supB = median5(hSupB[0], hSupB[1], hSupB[2], hSupB[3], hSupB[4]);
 
-          derR = median3(hDerR[0], hDerR[1], hDerR[2]);
-          derG = median3(hDerG[0], hDerG[1], hDerG[2]);
-          derB = median3(hDerB[0], hDerB[1], hDerB[2]);
+          derR = median5(hDerR[0], hDerR[1], hDerR[2], hDerR[3], hDerR[4]);
+          derG = median5(hDerG[0], hDerG[1], hDerG[2], hDerG[3], hDerG[4]);
+          derB = median5(hDerB[0], hDerB[1], hDerB[2], hDerB[3], hDerB[4]);
 
-          cenR = median3(hCenR[0], hCenR[1], hCenR[2]);
-          cenG = median3(hCenG[0], hCenG[1], hCenG[2]);
-          cenB = median3(hCenB[0], hCenB[1], hCenB[2]);
+          cenR = median5(hCenR[0], hCenR[1], hCenR[2], hCenR[3], hCenR[4]);
+          cenG = median5(hCenG[0], hCenG[1], hCenG[2], hCenG[3], hCenG[4]);
+          cenB = median5(hCenB[0], hCenB[1], hCenB[2], hCenB[3], hCenB[4]);
 
           // Compresión cromática suave para escenas dominantemente rojas:
           // En escenas rojas de TV, la cámara Govee capta bleed óptico de verde (G=35..60).
@@ -566,28 +573,27 @@ interval:
             spatialContrast = std::max(dColorLR, dColorTC);
 
             // Detección de Dinamismo y Dispersión Calibrada:
-            // 1. hasSpatialDiversity: Contraste multizona real (los lados opuestos tienen colores diferentes).
-            //    En estático puro o color fijo: dColorLR <= 10. En vídeo multizona: dColorLR >= 35..250.
-            bool hasSpatialDiversity = (dColorLR >= 35 || (dColorLR >= 20 && dColorTC >= 50) || dColorTC >= 100);
+            // 1. hasSpatialDiversity: Contraste multizona real en ambos ejes (izquierda/derecha y dispersión global).
+            //    En estático puro o color fijo: dColorLR <= 10 y rawSpread <= 20. En vídeo multizona: dColorLR >= 42 y rawSpread >= 55.
+            bool hasSpatialDiversity = ((dColorLR >= 42 && rawSpread >= 55) || (dColorLR >= 28 && rawSpread >= 95) || dColorTC >= 110);
 
-            // 2. isPerimeterUniform: El perímetro es 100% homogéneo y congelado a nivel de hardware.
-            //    En modo Color/Estático de la app Govee, todos los 36 LEDs tienen el mismo color y cero ruido de cámara (rawSpread <= 12 y tempDelta <= 14).
-            isPerimeterUniform = (rawSpread <= 12 && tempDelta <= 14);
+            // 2. isPerimeterUniform: Todos los 36 LEDs del perímetro tienen el mismo color (modo Color/Estático de la app Govee).
+            isPerimeterUniform = (dColorLR <= 20 && rawSpread <= 30);
 
-            // 3. hasMotion: Movimiento temporal continuo.
-            //    CRÍTICO: Si el perímetro es uniforme (spatialContrast < 20), cualquier cambio temporal
-            //    proviene de un ajuste del control deslizante de color/brillo en la app Govee (modo estático),
-            //    ¡NUNCA de vídeo! Solo es movimiento de vídeo si coexiste con contraste espacial.
-            bool hasMotion = (tempDelta >= 28 && spatialContrast >= 20);
+            // 3. hasMotion: Movimiento temporal continuo con contraste espacial simultáneo.
+            //    Ignora derivas en modo común de 50Hz (cable único sin GND) y ajustes de color/brillo en la app Govee.
+            bool hasMotion = (tempDelta >= 32 && dColorLR >= 25 && rawSpread >= 40);
 
             // 4. isVideoActivity: Hay actividad si hay contraste espacial multizona O movimiento con contraste.
             bool isVideoActivity = (hasSpatialDiversity || hasMotion);
 
-            // 5. isTrulyStatic: Es estático si el perímetro se mantiene uniforme y congelado.
-            bool isTrulyStatic = isPerimeterUniform;
+            // 5. isTrulyStatic: Perímetro uniforme y estable (tolera micro-rizado de 50Hz de masa flotante).
+            bool isTrulyStatic = (isPerimeterUniform && tempDelta <= 35);
 
             if (hasSpatialDiversity) {
               consecutiveStrongVideoFrames++;
+            } else if (isPerimeterUniform) {
+              consecutiveStrongVideoFrames = std::max(0, consecutiveStrongVideoFrames - 3);
             } else {
               if (consecutiveStrongVideoFrames > 0) consecutiveStrongVideoFrames--;
             }
@@ -595,9 +601,11 @@ interval:
 
             if (isVideoActivity) {
               consecutiveVideoFrames++;
-              if (consecutiveVideoFrames >= 3) {
+              if (consecutiveVideoFrames >= 5) {
                 lastVideoActivityTime = now;
               }
+            } else if (isPerimeterUniform) {
+              consecutiveVideoFrames = std::max(0, consecutiveVideoFrames - 3);
             } else {
               if (consecutiveVideoFrames > 0) {
                 consecutiveVideoFrames--;
@@ -606,8 +614,12 @@ interval:
 
             if (isTrulyStatic) {
               consecutiveStaticFrames++;
-            } else {
+            } else if (isPerimeterUniform) {
+              // Cambio suave de color uniforme (rueda de la app o deriva de masa): mantener contador sin resetear
+            } else if (hasSpatialDiversity && consecutiveStrongVideoFrames >= 10) {
               consecutiveStaticFrames = 0;
+            } else {
+              consecutiveStaticFrames = std::max(0, consecutiveStaticFrames - 3);
             }
           }
 
@@ -621,9 +633,9 @@ interval:
           if (currentMode == "Standby") {
             // Salida de Standby al detectar luz/señal continua (>20 frames encendidos ~800ms):
             if (!isBlack && consecutiveAwakeFrames >= 20) {
-              if (consecutiveStrongVideoFrames >= 10 || consecutiveVideoFrames >= 20) {
+              if (consecutiveStrongVideoFrames >= 12 || consecutiveVideoFrames >= 20) {
                 targetCandidate = "Vídeo";
-              } else if (isPerimeterUniform && consecutiveStaticFrames >= 20) {
+              } else if (isPerimeterUniform && consecutiveStaticFrames >= 15) {
                 targetCandidate = "Estático";
               } else {
                 targetCandidate = previousActiveMode;
@@ -634,9 +646,9 @@ interval:
             if (consecutiveBlackFrames >= 100) {
               // Pantalla/tira apagada en negro durante ~4.0s -> Standby
               targetCandidate = "Standby";
-            } else if (consecutiveStrongVideoFrames >= 15 || consecutiveVideoFrames >= 35) {
-              // Con 15 frames (~600ms) de contraste multizona fuerte O 35 frames (~1.4s) de contraste continuo conmuta a Vídeo.
-              // Los cambios de color/brillo en la app Govee tienen spatialContrast < 20, por lo que nunca conmutan a Vídeo.
+            } else if (consecutiveStrongVideoFrames >= 20 || consecutiveVideoFrames >= 40) {
+              // Con 20 frames (~800ms) de contraste multizona fuerte O 40 frames (~1.6s) de actividad de vídeo conmuta a Vídeo.
+              // Los cambios de color/brillo en la app Govee tienen perímetro uniforme y decaen rápidamente (-3/frame).
               targetCandidate = "Vídeo";
             }
           } else if (currentMode == "Vídeo") {
@@ -644,11 +656,8 @@ interval:
             if (consecutiveBlackFrames >= 100) {
               // ~4.0s de negro absoluto sostenido -> Standby
               targetCandidate = "Standby";
-            } else if (consecutiveStaticFrames >= 75 && (now - lastVideoActivityTime >= 3000)) {
-              // Transición a Estático: 3.0s (75 frames) continuos de congelamiento total
-              // en todos los 36 LEDs (rawSpread <= 12 y tempDelta <= 14).
-              // Físicamente IMPOSIBLE durante una película (ruido de cámara tempDelta > 20 y rawSpread > 30),
-              // pero ultra-rápido y fiable (3s) al seleccionar color fijo en la app Govee.
+            } else if (consecutiveStaticFrames >= 70) {
+              // Transición a Estático: ~2.8s (70 frames) de señal perimetral uniforme y estable.
               targetCandidate = "Estático";
             }
           }
@@ -664,6 +673,7 @@ interval:
                 previousActiveMode = currentMode;
               }
               consecutiveVideoFrames = 0;
+              consecutiveStrongVideoFrames = 0;
               consecutiveStaticFrames = 0;
               consecutiveBlackFrames = 0;
             }
@@ -680,11 +690,12 @@ interval:
           }
 
           // Si el interruptor del puente está APAGADO en Home Assistant,
-          // no enviamos nada a las bombillas secundarias (el hardware queda monitorizado sin alterar nada).
+          // no enviamos nada a las bombillas secundarias (el hardware queda monitorizado sin alterar el filtro de mediana).
           if (!id(modo_ambilight).state) {
             fIzqR = -1; fSupR = -1; fCenR = -1; fDerR = -1;
             pIzqR = -1; pSupR = -1; pCenR = -1; pDerR = -1;
-            hIzqR[0] = -1;
+            // CRÍTICO: NO resetear hIzqR[0] = -1 aquí. Si modo_ambilight se apaga (ej. automatización HA en Estático),
+            // el filtro de mediana de 5 muestras DEBE seguir activo para evitar falsos saltos a Vídeo por ruido sin GND.
             if (millis() - tDiag >= 3000) {
               ESP_LOGI("sniffer", "PAUSADO: Modo Ambilight está APAGADO en Home Assistant.");
               tDiag = millis();
