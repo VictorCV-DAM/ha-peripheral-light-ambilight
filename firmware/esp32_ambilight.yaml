@@ -558,21 +558,24 @@ interval:
             if (consecutiveVideoFrames > 0) consecutiveVideoFrames--;
             if (consecutiveStaticFrames > 0) consecutiveStaticFrames--;
           } else {
-            // Contraste espacial perimetral directo (Izquierda vs Derecha, Techo vs Centro):
+            // Contraste espacial perimetral directo:
+            // 1. dColorLR: Diferencia horizontal (Izquierda vs Derecha).
+            //    Dado que la cámara está centrada horizontalmente, los ángulos y reflejos son idénticos.
+            //    En estático puro o color fijo, dColorLR es estrictamente <= 10.
+            //    En vídeo real con contenido multizona, dColorLR es >= 40 (típicamente 60..250).
             int dColorLR = abs(izqR - derR) + abs(izqG - derG) + abs(izqB - derB);
+
+            // 2. dColorTC: Diferencia vertical (Techo vs Centro/Mesa).
+            //    La cámara mira desde arriba hacia abajo en ángulo picado, por lo que la perspectiva y los reflejos
+            //    generan un gradiente vertical físico de hasta 50-80 incluso en pantalla estática.
             int dColorTC = abs(supR - cenR) + abs(supG - cenG) + abs(supB - cenB);
             spatialContrast = std::max(dColorLR, dColorTC);
 
             // Detección de Dinamismo y Dispersión Calibrada:
-            // 1. isStrongVideo: Contraste espacial multizona real entre lados opuestos de la TV (>= 38).
-            bool isStrongVideo = (spatialContrast >= 38);
-
-            // 2. isDynamicVideo: Contraste espacial moderado (>= 24) con dinamismo temporal (tempDelta >= 35).
-            //    REGLA DE ORO: Si spatialContrast < 24, todos los LEDs tienen el mismo color perimetral (modo estático).
-            //    Por lo tanto, NUNCA se clasifica como vídeo cuando el contraste espacial es bajo, impidiendo cualquier rebote.
-            bool isDynamicVideo = (spatialContrast >= 24 && tempDelta >= 35);
-
-            // 3. isVideoActivity:
+            // La detección de vídeo real debe basarse en el eje horizontal simétrico (dColorLR >= 42),
+            // o en un contraste combinado, neutralizando el gradiente vertical de perspectiva:
+            bool isStrongVideo = (dColorLR >= 42 || (dColorLR >= 25 && dColorTC >= 55) || dColorTC >= 115);
+            bool isDynamicVideo = (dColorLR >= 25 && tempDelta >= 35);
             bool isVideoActivity = (isStrongVideo || isDynamicVideo);
 
             if (isStrongVideo) {
@@ -607,7 +610,7 @@ interval:
           if (currentMode == "Standby") {
             // Salida instantánea de Standby al detectar luz/señal continua (>20 frames encendidos ~800ms):
             if (!isBlack && consecutiveAwakeFrames >= 20) {
-              if (consecutiveStrongVideoFrames >= 6 || consecutiveVideoFrames >= 15) {
+              if (consecutiveStrongVideoFrames >= 10 || consecutiveVideoFrames >= 20) {
                 targetCandidate = "Vídeo";
               } else {
                 targetCandidate = "Estático";
@@ -618,8 +621,8 @@ interval:
             if (consecutiveBlackFrames >= 25) {
               // Pantalla/tira apagada en negro durante ~1.0s -> Standby
               targetCandidate = "Standby";
-            } else if (consecutiveStrongVideoFrames >= 6 || consecutiveVideoFrames >= 15) {
-              // Con 6 frames (~240ms) de contraste multizona real (>=38) conmuta inmediatamente a Vídeo
+            } else if (consecutiveStrongVideoFrames >= 12 || consecutiveVideoFrames >= 25) {
+              // Con 12 frames (~480ms) de contraste multizona real (dColorLR >= 42) conmuta a Vídeo
               targetCandidate = "Vídeo";
             }
           } else if (currentMode == "Vídeo") {
@@ -627,8 +630,8 @@ interval:
             if (consecutiveBlackFrames >= 25) {
               // ~1.0s de negro absoluto sostenido -> Standby
               targetCandidate = "Standby";
-            } else if (consecutiveStaticFrames >= 60 && (now - lastVideoActivityTime >= 2400)) {
-              // Con 2.4s (60 frames a 40ms) de uniformidad perimetral o quietud conmuta a Estático de forma ágil y natural
+            } else if (consecutiveStaticFrames >= 50 && (now - lastVideoActivityTime >= 2000)) {
+              // Con 2.0s (50 frames a 40ms) de uniformidad perimetral o quietud conmuta a Estático
               targetCandidate = "Estático";
             }
           }
