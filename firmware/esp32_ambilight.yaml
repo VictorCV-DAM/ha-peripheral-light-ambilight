@@ -275,6 +275,18 @@ interval:
           static int pCenR = -1, pCenG = -1, pCenB = -1;
           static int pDerR = -1, pDerG = -1, pDerB = -1;
 
+          auto median3 = [](int a, int b, int c) -> int {
+            if ((a <= b && b <= c) || (c <= b && b <= a)) return b;
+            if ((b <= a && a <= c) || (c <= a && a <= b)) return a;
+            return c;
+          };
+
+          static int hIzqR[3] = {-1, -1, -1}, hIzqG[3] = {-1, -1, -1}, hIzqB[3] = {-1, -1, -1};
+          static int hSupR[3] = {-1, -1, -1}, hSupG[3] = {-1, -1, -1}, hSupB[3] = {-1, -1, -1};
+          static int hDerR[3] = {-1, -1, -1}, hDerG[3] = {-1, -1, -1}, hDerB[3] = {-1, -1, -1};
+          static int hCenR[3] = {-1, -1, -1}, hCenG[3] = {-1, -1, -1}, hCenB[3] = {-1, -1, -1};
+          static int hIdx = 0;
+
           static uint32_t tDiag = 0;
           if (id(test_en_curso)) {
             return;
@@ -316,6 +328,7 @@ interval:
                 id(govee_signal_active).publish_state(false);
                 id(govee_hardware_state).publish_state("Standby");
               }
+              hIzqR[0] = -1;
             }
             return;
           }
@@ -393,6 +406,42 @@ interval:
           int cenR = sR_cen / nInf;
           int cenG = sG_cen / nInf;
           int cenB = sB_cen / nInf;
+
+          // Filtrado de Mediana 3-Tap:
+          // En cable único sin GND, el ruido por oscilación capacitiva o armónicos de 50Hz altera a veces
+          // un único fotograma aislado. Un filtro de mediana de 3 muestras elimina con un 100% de eficacia
+          // cualquier salto, bit-flip o glitch transitorio de 1 frame, sin alterar la fidelidad cromática
+          // ni introducir desincronización entre zonas durante vídeo real:
+          if (hIzqR[0] < 0) {
+            for (int j = 0; j < 3; j++) {
+              hIzqR[j] = izqR; hIzqG[j] = izqG; hIzqB[j] = izqB;
+              hSupR[j] = supR; hSupG[j] = supG; hSupB[j] = supB;
+              hDerR[j] = derR; hDerG[j] = derG; hDerB[j] = derB;
+              hCenR[j] = cenR; hCenG[j] = cenG; hCenB[j] = cenB;
+            }
+          } else {
+            hIzqR[hIdx] = izqR; hIzqG[hIdx] = izqG; hIzqB[hIdx] = izqB;
+            hSupR[hIdx] = supR; hSupG[hIdx] = supG; hSupB[hIdx] = supB;
+            hDerR[hIdx] = derR; hDerG[hIdx] = derG; hDerB[hIdx] = derB;
+            hCenR[hIdx] = cenR; hCenG[hIdx] = cenG; hCenB[hIdx] = cenB;
+            hIdx = (hIdx + 1) % 3;
+          }
+
+          izqR = median3(hIzqR[0], hIzqR[1], hIzqR[2]);
+          izqG = median3(hIzqG[0], hIzqG[1], hIzqG[2]);
+          izqB = median3(hIzqB[0], hIzqB[1], hIzqB[2]);
+
+          supR = median3(hSupR[0], hSupR[1], hSupR[2]);
+          supG = median3(hSupG[0], hSupG[1], hSupG[2]);
+          supB = median3(hSupB[0], hSupB[1], hSupB[2]);
+
+          derR = median3(hDerR[0], hDerR[1], hDerR[2]);
+          derG = median3(hDerG[0], hDerG[1], hDerG[2]);
+          derB = median3(hDerB[0], hDerB[1], hDerB[2]);
+
+          cenR = median3(hCenR[0], hCenR[1], hCenR[2]);
+          cenG = median3(hCenG[0], hCenG[1], hCenG[2]);
+          cenB = median3(hCenB[0], hCenB[1], hCenB[2]);
 
           // Detección del estado real del hardware (Vídeo vs Estático vs Standby)
           int maxOverall = std::max({izqR, izqG, izqB, supR, supG, supB, derR, derG, derB, cenR, cenG, cenB});
@@ -509,8 +558,8 @@ interval:
 
             if (isVideoActivity) {
               consecutiveVideoFrames++;
-              // En vídeo activo, resetea a cero el contador estático para garantizar estabilidad
-              consecutiveStaticFrames = 0;
+              // En vídeo activo, decrementa el contador estático para garantizar estabilidad
+              consecutiveStaticFrames = (consecutiveStaticFrames > 3) ? (consecutiveStaticFrames - 3) : 0;
               if (consecutiveVideoFrames >= 3) {
                 lastVideoActivityTime = now;
               }
@@ -587,6 +636,7 @@ interval:
           if (!id(modo_ambilight).state) {
             fIzqR = -1; fSupR = -1; fCenR = -1; fDerR = -1;
             pIzqR = -1; pSupR = -1; pCenR = -1; pDerR = -1;
+            hIzqR[0] = -1;
             if (millis() - tDiag >= 3000) {
               ESP_LOGI("sniffer", "PAUSADO: Modo Ambilight está APAGADO en Home Assistant.");
               tDiag = millis();
