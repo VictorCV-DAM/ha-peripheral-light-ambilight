@@ -304,14 +304,15 @@ interval:
             }
             prevFrameTime = now;
           } else {
-            // Si la línea está en silencio más de 6s -> Standby automático:
-            if (now - lastValidFrameTime > 6000) {
+            // Si la línea está en silencio más de 2s -> Standby automático rápido:
+            if (now - lastValidFrameTime > 2000) {
               if (currentMode != "Standby") {
-                ESP_LOGW("mode", "CAMBIO DE ESTADO: %s -> Standby (sin señal > 6s)", currentMode.c_str());
+                ESP_LOGW("mode", "CAMBIO DE ESTADO: %s -> Standby (sin señal > 2s)", currentMode.c_str());
                 currentMode = "Standby";
                 currentSignalActive = false;
                 consecutiveVideoFrames = 0;
                 consecutiveStaticFrames = 0;
+                consecutiveStrongVideoFrames = 0;
                 id(govee_signal_active).publish_state(false);
                 id(govee_hardware_state).publish_state("Standby");
               }
@@ -489,11 +490,11 @@ interval:
             // 1. isStrongVideo: Evidencia física pura de vídeo multizona (contraste espacial real entre bordes de la TV).
             //    En cualquier modo de color estático (fijo o cambiando entre colores en la app), todos los LEDs reciben el mismo
             //    color en todo el perímetro (spread=0), por lo que isStrongVideo es SIEMPRE FALSO al cambiar de color.
-            bool isStrongVideo = (totalSpread >= 26 || chromaSpread >= 22);
+            bool isStrongVideo = (totalSpread >= 24 || chromaSpread >= 20);
 
-            // 2. isVideoActivity: Sensibilidad continua para retener el modo Vídeo una vez activo
-            //    (incluso en escenas de cine con fondos planos o transiciones suaves).
-            bool isVideoActivity = (isStrongVideo || totalSpread >= 12 || chromaSpread >= 12 || tempDelta >= 6 || (totalSpread >= 6 && tempDelta >= 3));
+            // 2. isVideoActivity: Detección de actividad real de vídeo (espacial o temporal genuina).
+            //    Filtra con holgura el ruido de masa flotante de 50Hz en cable único (donde tempDelta oscila entre 4 y 14 y spread < 10).
+            bool isVideoActivity = (isStrongVideo || totalSpread >= 18 || chromaSpread >= 16 || tempDelta >= 26 || (totalSpread >= 10 && tempDelta >= 16));
 
             if (isStrongVideo) {
               consecutiveStrongVideoFrames++;
@@ -505,9 +506,8 @@ interval:
             if (isVideoActivity) {
               consecutiveVideoFrames++;
               // Inmunidad a glitches de cable único sin GND:
-              // Un glitch aislado de 1 frame solo resta 4 a sF y se recupera de inmediato.
               // En vídeo real continuo (20-25 frames/s), sF queda implacablemente aplastado en 0.
-              consecutiveStaticFrames = (consecutiveStaticFrames > 4) ? (consecutiveStaticFrames - 4) : 0;
+              consecutiveStaticFrames = (consecutiveStaticFrames > 3) ? (consecutiveStaticFrames - 3) : 0;
               if (consecutiveVideoFrames >= 3) {
                 // Solo si el dinamismo dura >= 3 frames (~120ms) se confirma actividad de vídeo real
                 lastVideoActivityTime = now;
@@ -539,23 +539,20 @@ interval:
             }
           } else if (currentMode == "Estático") {
             // Estando en Estático:
-            if (consecutiveBlackFrames >= 30) {
-              // Pantalla/tira apagada en negro durante ~1.2s -> Standby
+            if (consecutiveBlackFrames >= 25) {
+              // Pantalla/tira apagada en negro durante ~1.0s -> Standby
               targetCandidate = "Standby";
-            } else if (consecutiveStrongVideoFrames >= 10) {
-              // Para salir de Estático e ir a Vídeo, se EXIGE contraste espacial multizona real (totalSpread>=26)
-              // sostenido durante 10 frames (~400ms).
-              // Cambiar de un color a otro en la app Govee afecta a todos los LEDs por igual (spread=0),
-              // por lo que NUNCA provoca falsos saltos a Vídeo.
+            } else if (consecutiveStrongVideoFrames >= 8) {
+              // Con 8 frames (~320ms) de contraste espacial multizona real (totalSpread>=24) conmuta a Vídeo
               targetCandidate = "Vídeo";
             }
           } else if (currentMode == "Vídeo") {
             // Estando en Vídeo:
-            if (consecutiveBlackFrames >= 30) {
-              // ~1.2s de negro absoluto sostenido -> Standby
+            if (consecutiveBlackFrames >= 25) {
+              // ~1.0s de negro absoluto sostenido -> Standby
               targetCandidate = "Standby";
-            } else if (consecutiveStaticFrames >= 70 && (now - lastVideoActivityTime >= 2800)) {
-              // Exige ~2.8s (70 frames) de predominancia estática sin vídeo genuino para pasar a Lámpara fija
+            } else if (consecutiveStaticFrames >= 50 && (now - lastVideoActivityTime >= 2000)) {
+              // Exige 2.0s (50 frames de 40ms) continuos de predominancia estática sin vídeo genuino para pasar a Lámpara fija
               targetCandidate = "Estático";
             }
           }
