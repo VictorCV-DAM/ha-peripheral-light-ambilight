@@ -528,9 +528,9 @@ interval:
             consecutiveBlackFrames = 0;
           }
 
-          // Si veníamos con señal encendida y cae a 0 durante solo 1 fotograma (<50ms),
+          // Si veníamos con señal encendida y cae a 0 durante solo 1..2 fotogramas (<90ms),
           // es un micro-corte por oscilación de masa flotante, NO un apagado real.
-          bool isTransientBlackDrop = (isBlack && consecutiveBlackFrames <= 1 && prevRawIzqR >= 0);
+          bool isTransientBlackDrop = (isBlack && consecutiveBlackFrames <= 2 && prevRawIzqR >= 0);
 
           if (!isBlack) {
             prevRawIzqR = izqR; prevRawIzqG = izqG; prevRawIzqB = izqB;
@@ -564,17 +564,16 @@ interval:
             spatialContrast = std::max(dColorLR, dColorTC);
 
             // Detección de Dinamismo y Dispersión Calibrada:
-            // 1. isStrongVideo: Contraste espacial multizona real entre lados opuestos de la TV.
-            //    En estático, la caída de tensión (IR drop) en la tira puede generar un gradiente de 30-40 en blanco/pasteles.
-            //    Por ello, el contraste multizona real debe ser >= 48 para no confundir la caída física con vídeo.
+            // 1. isStrongVideo: Contraste espacial multizona real entre lados opuestos de la TV (>= 48).
             bool isStrongVideo = (spatialContrast >= 48);
 
-            // 2. isVideoMotion: Dinamismo temporal continuo (movimiento entre fotogramas sucesivos).
-            //    En estático puro, tempDelta <= 6. En vídeo real en movimiento, tempDelta >= 24.
-            bool isVideoMotion = (tempDelta >= 24);
+            // 2. isDynamicVideo: Contraste espacial moderado (>= 28) combinado con dinamismo temporal real (tempDelta >= 60).
+            //    En estático puro o al cambiar de color/brillo en la app Govee, todos los LEDs cambian juntos:
+            //    spatialContrast es < 25 (típicamente 0..8), por lo que NUNCA se confunde con vídeo.
+            bool isDynamicVideo = (spatialContrast >= 28 && tempDelta >= 60);
 
-            // 3. isVideoActivity: Sensibilidad continua para retener el modo Vídeo una vez activo:
-            bool isVideoActivity = (isStrongVideo || isVideoMotion);
+            // 3. isVideoActivity: Actividad real de Ambilight multizona:
+            bool isVideoActivity = (isStrongVideo || isDynamicVideo);
 
             if (isStrongVideo) {
               consecutiveStrongVideoFrames++;
@@ -590,9 +589,9 @@ interval:
                 lastVideoActivityTime = now;
               }
             } else {
-              // Modo Lámpara / Color fijo (inmóvil e idéntico en todo el perímetro)
+              // Modo Lámpara / Color fijo (inmóvil o uniforme en todo el perímetro)
               consecutiveStaticFrames++;
-              if (consecutiveStaticFrames > 5 && consecutiveVideoFrames > 0) {
+              if (consecutiveVideoFrames > 0) {
                 consecutiveVideoFrames--;
               }
             }
@@ -619,8 +618,8 @@ interval:
             if (consecutiveBlackFrames >= 25) {
               // Pantalla/tira apagada en negro durante ~1.0s -> Standby
               targetCandidate = "Standby";
-            } else if (consecutiveStrongVideoFrames >= 8 || consecutiveVideoFrames >= 35) {
-              // Con 8 frames (~320ms) de contraste multizona O 35 frames (~1.4s) de dinamismo continuo conmuta a Vídeo
+            } else if (consecutiveStrongVideoFrames >= 8 || consecutiveVideoFrames >= 30) {
+              // Con 8 frames (~320ms) de contraste multizona O 30 frames (~1.2s) de dinamismo continuo conmuta a Vídeo
               targetCandidate = "Vídeo";
             }
           } else if (currentMode == "Vídeo") {
@@ -628,8 +627,8 @@ interval:
             if (consecutiveBlackFrames >= 25) {
               // ~1.0s de negro absoluto sostenido -> Standby
               targetCandidate = "Standby";
-            } else if (consecutiveStaticFrames >= 50 && (now - lastVideoActivityTime >= 2000)) {
-              // Exige 2.0s (50 frames de 40ms) de quietud absoluta sin dinamismo ni contraste para pasar a Estático
+            } else if (consecutiveStaticFrames >= 30 && (now - lastVideoActivityTime >= 1500)) {
+              // Con 1.2s (30 frames) de uniformidad perimetral o quietud conmuta a Estático
               targetCandidate = "Estático";
             }
           }
