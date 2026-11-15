@@ -498,11 +498,41 @@ interval:
           static int prevRawDerR = -1, prevRawDerG = -1, prevRawDerB = -1;
           static int prevRawCenR = -1, prevRawCenG = -1, prevRawCenB = -1;
 
-          int tempDelta = (prevRawIzqR < 0) ? 0 :
-                          (abs(izqR - prevRawIzqR) + abs(izqG - prevRawIzqG) + abs(izqB - prevRawIzqB) +
-                           abs(supR - prevRawSupR) + abs(supG - prevRawSupG) + abs(supB - prevRawSupB) +
-                           abs(derR - prevRawDerR) + abs(derG - prevRawDerG) + abs(derB - prevRawDerB) +
-                           abs(cenR - prevRawCenR) + abs(cenG - prevRawCenG) + abs(cenB - prevRawCenB));
+          int deltaIzq = (prevRawIzqR < 0) ? 0 : (abs(izqR - prevRawIzqR) + abs(izqG - prevRawIzqG) + abs(izqB - prevRawIzqB));
+          int deltaSup = (prevRawSupR < 0) ? 0 : (abs(supR - prevRawSupR) + abs(supG - prevRawSupG) + abs(supB - prevRawSupB));
+          int deltaDer = (prevRawDerR < 0) ? 0 : (abs(derR - prevRawDerR) + abs(derG - prevRawDerG) + abs(derB - prevRawDerB));
+          int deltaCen = (prevRawCenR < 0) ? 0 : (abs(cenR - prevRawCenR) + abs(cenG - prevRawCenG) + abs(cenB - prevRawCenB));
+
+          // Supresión física de bit-slip de cola WS2811 (sin GND):
+          // Los primeros 18 LEDs tras el pulso de reset (>60us) son IZQ (LEDs 1..7) y SUP (LEDs 8..18).
+          // En modo Estático real (ej. task-12831), IZQ y SUP son 100% estables e idénticos (dColorIS <= 14, deltaIzq <= 6, deltaSup <= 6),
+          // mientras que CEN (LEDs 26..36, al final del paquete de 1.11ms) y ocasionalmente DER sufren desplazamiento de bits.
+          int dColorIS = abs(izqR - supR) + abs(izqG - supG) + abs(izqB - supB);
+          bool isHeadFrozenUniform = (!isBlack && prevRawIzqR >= 0 && dColorIS <= 14 && deltaIzq <= 6 && deltaSup <= 6);
+          if (isHeadFrozenUniform) {
+            int dCenToHead = abs(cenR - izqR) + abs(cenG - izqG) + abs(cenB - izqB);
+            int dDerToHead = abs(derR - izqR) + abs(derG - izqG) + abs(derB - izqB);
+            if (dCenToHead >= 24 || deltaCen >= 20) {
+              cenR = izqR; cenG = izqG; cenB = izqB;
+              deltaCen = deltaIzq;
+            }
+            if (dDerToHead >= 24 || deltaDer >= 20) {
+              derR = izqR; derG = izqG; derB = izqB;
+              deltaDer = deltaIzq;
+            }
+          }
+
+          int headDelta = deltaIzq + deltaSup;
+          int tempDelta = deltaIzq + deltaSup + deltaDer + deltaCen;
+
+          // Recalcular rawSpread tras limpiar posibles glitches de cola:
+          maxR = std::max({izqR, supR, derR, cenR});
+          minR = std::min({izqR, supR, derR, cenR});
+          maxG = std::max({izqG, supG, derG, cenG});
+          minG = std::min({izqG, supG, derG, cenG});
+          maxB = std::max({izqB, supB, derB, cenB});
+          minB = std::min({izqB, supB, derB, cenB});
+          rawSpread = (maxR - minR) + (maxG - minG) + (maxB - minB);
 
           // Detección y neutralización de micro-glitches de bus y micro-cortes de 50Hz sin GND:
           static int consecutiveBlackFrames = 0;
@@ -532,10 +562,7 @@ interval:
           }
           consecutiveAwakeFrames = std::min(consecutiveAwakeFrames, 100);
 
-          // Integrador Leaky-Bucket Asimétrico con límites de saturación:
-          // En cable único sin GND, el batimiento entre el reloj de trama (~24.9Hz) y la red de 50Hz
-          // barre la ventana de paquete WS2811 (1.11ms de cada 40ms) durante 12..28 fotogramas (~0.5s..1.1s)
-          // cada ~10 segundos, seguido de ~220 fotogramas (~8.9s) de señal 100% limpia y uniforme.
+          // Integrador Leaky-Bucket compatible tanto con Vídeo Multizona (Part) como Vídeo Pantalla Completa (full_screen: true):
           static uint32_t lastVideoActivityTime = 0;
           int spatialContrast = 0;
           bool isPerimeterUniform = false;
@@ -549,42 +576,38 @@ interval:
             // Contraste espacial perimetral directo:
             int dColorLR = abs(izqR - derR) + abs(izqG - derG) + abs(izqB - derB);
             int dColorTC = abs(supR - cenR) + abs(supG - cenG) + abs(supB - cenB);
-            spatialContrast = std::max(dColorLR, dColorTC);
+            spatialContrast = std::max({dColorIS, dColorLR, dColorTC});
 
-            // 1. hasSpatialDiversity: Contraste multizona real en ambos ejes.
-            bool hasSpatialDiversity = ((dColorLR >= 42 && rawSpread >= 55) || (dColorLR >= 28 && rawSpread >= 95) || dColorTC >= 110);
+            // 1. hasSpatialDiversity: Contraste multizona real verificado en la cabeza de la tira (IZQ/SUP/DER).
+            bool hasSpatialDiversity = (dColorIS >= 28 || dColorLR >= 32 || rawSpread >= 42);
 
             // 2. isPerimeterUniform: Todos los bordes tienen el mismo color.
-            isPerimeterUniform = (dColorLR <= 20 && rawSpread <= 30);
+            isPerimeterUniform = (dColorIS <= 16 && dColorLR <= 20 && rawSpread <= 28);
 
-            // 3. hasMotion: Movimiento temporal continuo con contraste espacial simultáneo.
-            bool hasMotion = (tempDelta >= 32 && dColorLR >= 25 && rawSpread >= 40);
+            // 3. hasHeadMotion: Cambio dinámico real en los primeros 18 LEDs (IZQ + SUP).
+            //    Cubre el modo Vídeo full_screen: true (donde contrast=0 pero el color de toda la tira cambia con la TV)
+            //    y las transiciones de escena en vídeo.
+            bool hasHeadMotion = (headDelta >= 16 || (deltaIzq >= 10 && deltaSup >= 10));
 
-            // 4. isVideoActivity: Actividad si hay contraste espacial multizona O movimiento con contraste.
-            bool isVideoActivity = (hasSpatialDiversity || hasMotion);
+            // 4. isVideoActivity: Actividad de vídeo tanto multizona como pantalla completa.
+            bool isVideoActivity = (hasSpatialDiversity || hasHeadMotion);
 
-            // 5. isTrulyStatic: Perímetro uniforme y congelado (en modo estático real, durante los ~8.9s
-            //    entre barridos de 50Hz, dColorLR <= 12, rawSpread <= 18 y tempDelta <= 12).
-            bool isTrulyStatic = (dColorLR <= 12 && rawSpread <= 18 && tempDelta <= 12);
+            // 5. isTrulyStatic: Perímetro uniforme y congelado en la cabeza de la tira (IZQ + SUP + DER).
+            bool isTrulyStatic = (dColorIS <= 12 && dColorLR <= 16 && headDelta <= 8 && tempDelta <= 14);
 
             if (hasSpatialDiversity) {
               consecutiveStrongVideoFrames++;
-            } else if (isPerimeterUniform) {
-              // Purga rápida (-6/frame): borra cualquier barrido de batimiento de 50Hz (<=28 frames) en <200ms
-              consecutiveStrongVideoFrames = std::max(0, consecutiveStrongVideoFrames - 6);
-            } else {
+            } else if (isTrulyStatic) {
               if (consecutiveStrongVideoFrames > 0) consecutiveStrongVideoFrames--;
             }
             consecutiveStrongVideoFrames = std::min(consecutiveStrongVideoFrames, 100);
 
             if (isVideoActivity) {
-              consecutiveVideoFrames++;
-              if (consecutiveVideoFrames >= 10) {
+              consecutiveVideoFrames += (hasSpatialDiversity && hasHeadMotion) ? 2 : 1;
+              if (consecutiveVideoFrames >= 8) {
                 lastVideoActivityTime = now;
               }
-            } else if (isPerimeterUniform) {
-              consecutiveVideoFrames = std::max(0, consecutiveVideoFrames - 6);
-            } else {
+            } else if (isTrulyStatic) {
               if (consecutiveVideoFrames > 0) {
                 consecutiveVideoFrames--;
               }
@@ -592,13 +615,10 @@ interval:
 
             if (isTrulyStatic) {
               consecutiveStaticFrames++;
-            } else if (isPerimeterUniform && tempDelta <= 28) {
-              // Micro-rizado suave en modo común: mantener contador sin resetear
-            } else if (hasSpatialDiversity && consecutiveStrongVideoFrames >= 38) {
-              // Solo resetear a 0 cuando el vídeo multizona supera el techo físico de barrido de 50Hz (>1.5s)
+            } else if (isVideoActivity && consecutiveVideoFrames >= 12) {
               consecutiveStaticFrames = 0;
-            } else {
-              consecutiveStaticFrames = std::max(0, consecutiveStaticFrames - 2);
+            } else if (isVideoActivity) {
+              consecutiveStaticFrames = std::max(0, consecutiveStaticFrames - 3);
             }
           }
 
@@ -612,9 +632,9 @@ interval:
           if (currentMode == "Standby") {
             // Salida de Standby al detectar luz/señal continua (>20 frames encendidos ~800ms):
             if (!isBlack && consecutiveAwakeFrames >= 20) {
-              if (consecutiveStrongVideoFrames >= 16 || consecutiveVideoFrames >= 20) {
+              if (consecutiveStrongVideoFrames >= 10 || consecutiveVideoFrames >= 14) {
                 targetCandidate = "Vídeo";
-              } else if (isPerimeterUniform && consecutiveStaticFrames >= 12) {
+              } else if (isPerimeterUniform && consecutiveStaticFrames >= 15) {
                 targetCandidate = "Estático";
               } else {
                 targetCandidate = previousActiveMode;
@@ -625,10 +645,9 @@ interval:
             if (consecutiveBlackFrames >= 100) {
               // Pantalla/tira apagada en negro durante ~4.0s -> Standby
               targetCandidate = "Standby";
-            } else if (consecutiveStrongVideoFrames >= 55 || consecutiveVideoFrames >= 68) {
-              // Exige >=55 frames (~2.2s) de contraste multizona fuerte O >=68 frames (~2.7s) de vídeo continuo.
-              // Como el barrido físico de 50Hz sobre el paquete WS2811 de 1.11ms dura como máximo 28 frames (~1.1s)
-              // y se purga a 0 (-6/frame) en los 8.9s siguientes, JAMÁS puede disparar un falso cambio a Vídeo.
+            } else if (consecutiveStrongVideoFrames >= 16 || consecutiveVideoFrames >= 20) {
+              // Con ~0.7s..0.8s de actividad real en la cabeza de la tira (IZQ/SUP) conmuta a Vídeo.
+              // En Estático real, isHeadFrozenUniform suprime el bit-slip de cola (CEN/DER), manteniendo vF=0.
               targetCandidate = "Vídeo";
             }
           } else if (currentMode == "Vídeo") {
@@ -636,8 +655,10 @@ interval:
             if (consecutiveBlackFrames >= 100) {
               // ~4.0s de negro absoluto sostenido -> Standby
               targetCandidate = "Standby";
-            } else if (consecutiveStaticFrames >= 75) {
-              // Transición a Estático: ~3.0s (75 frames) de señal perimetral uniforme y congelada.
+            } else if (consecutiveStaticFrames >= 150) {
+              // Transición a Estático: ~6.0s (150 frames) de señal perimetral uniforme y congelada.
+              // Evita caer a Estático en planos tranquilos de 3..5s durante una película/vídeo,
+              // y entra en Estático de forma continua a los 6s sin reseteos gracias a isHeadFrozenUniform.
               targetCandidate = "Estático";
             }
           }
