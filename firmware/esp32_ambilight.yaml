@@ -608,16 +608,16 @@ interval:
             spatialContrast = std::max({dColorIS, dColorLR, dColorTC});
 
             // 1. hasSpatialDiversity: Contraste multizona real verificado en la cabeza de la tira (IZQ/SUP/DER).
-            bool hasSpatialDiversity = (dColorIS >= 28 || dColorLR >= 32 || rawSpread >= 42);
+            bool hasSpatialDiversity = (dColorIS >= 20 || dColorLR >= 24 || rawSpread >= 32);
 
             // 2. isPerimeterUniform: Todos los bordes tienen el mismo color.
-            isPerimeterUniform = (dColorIS <= 16 && dColorLR <= 20 && rawSpread <= 28);
+            isPerimeterUniform = (dColorIS <= 14 && dColorLR <= 18 && rawSpread <= 24);
 
             // 3. isCoherentFullStripMotion: Las 4 zonas cambian al unísono manteniendo el mismo color en toda la tira
             //    (ej. modo Vídeo full_screen: true donde contrast=0..12 y dt >= 12 en toda la tira a la vez).
             //    El ruido de 50Hz sin GND jamás desplaza las 4 zonas al mismo RGB simultáneamente.
-            bool isCoherentFullStripMotion = (spatialContrast <= 12 && rawSpread <= 16 &&
-                                              tempDelta >= 12 && deltaIzq >= 2 && deltaSup >= 2 && deltaDer >= 2);
+            bool isCoherentFullStripMotion = (spatialContrast <= 14 && rawSpread <= 20 &&
+                                              tempDelta >= 12 && (deltaIzq >= 2 || deltaSup >= 2));
 
             // 4. Referencia de color para medir deriva cromática/brillo en planos suaves de Vídeo full_screen: true:
             if (staticRefR < 0 || consecutiveStaticFrames == 0) {
@@ -626,29 +626,29 @@ interval:
             dFromStaticRef = abs(izqR - staticRefR) + abs(izqG - staticRefG) + abs(izqB - staticRefB);
 
             // 5. hasHeadMotion: Cambio dinámico real en los primeros 18 LEDs (IZQ + SUP).
-            bool hasHeadMotion = (headDelta >= 22 || (deltaIzq >= 12 && deltaSup >= 12));
+            bool hasHeadMotion = (headDelta >= 16 || deltaIzq >= 10 || deltaSup >= 10);
 
             // 6. isVideoActivity: Actividad de vídeo tanto multizona como pantalla completa (full_screen: true).
             //    En full_screen: true la TV cambia de color/escena continuamente con contrast=0 pero dt enorme (dt=50..450).
-            bool isVideoActivity = (hasSpatialDiversity || hasHeadMotion || isCoherentFullStripMotion);
+            bool isVideoActivity = (hasSpatialDiversity || hasHeadMotion || isCoherentFullStripMotion || dFromStaticRef >= 16);
 
             // 7. isTrulyStatic: Perímetro uniforme, congelado frame a frame y sin deriva respecto a staticRef:
-            bool isTrulyStatic = (dColorIS <= 14 && dColorLR <= 18 && headDelta <= 8 && tempDelta <= 12 && dFromStaticRef <= 12);
+            bool isTrulyStatic = (dColorIS <= 14 && dColorLR <= 18 && headDelta <= 6 && tempDelta <= 10 && dFromStaticRef <= 10);
 
-            if (hasSpatialDiversity || isCoherentFullStripMotion) {
+            if (hasSpatialDiversity || isCoherentFullStripMotion || hasHeadMotion) {
               consecutiveStrongVideoFrames++;
-            } else if (isTrulyStatic || (isPerimeterUniform && tempDelta <= 6)) {
-              consecutiveStrongVideoFrames = std::max(0, consecutiveStrongVideoFrames - 3);
+            } else if (isTrulyStatic) {
+              consecutiveStrongVideoFrames = std::max(0, consecutiveStrongVideoFrames - 2);
             }
             consecutiveStrongVideoFrames = std::min(consecutiveStrongVideoFrames, 100);
 
             if (isVideoActivity) {
               consecutiveVideoFrames++;
-              if (consecutiveVideoFrames >= 8) {
+              if (consecutiveVideoFrames >= 6) {
                 lastVideoActivityTime = now;
               }
-            } else if (isTrulyStatic || (isPerimeterUniform && tempDelta <= 6)) {
-              consecutiveVideoFrames = std::max(0, consecutiveVideoFrames - 3);
+            } else if (isTrulyStatic) {
+              consecutiveVideoFrames = std::max(0, consecutiveVideoFrames - 2);
             }
 
             if (isCoherentFullStripMotion || (isPerimeterUniform && dFromStaticRef >= 14) ||
@@ -693,10 +693,9 @@ interval:
             if (consecutiveBlackFrames >= 100) {
               // Pantalla/tira apagada en negro durante ~4.0s -> Standby
               targetCandidate = "Standby";
-            } else if (consecutiveStrongVideoFrames >= 20 || consecutiveVideoFrames >= 22) {
-              // Conmuta a Vídeo ante ~0.8s..0.9s de actividad de vídeo sostenida.
-              // En modo Vídeo full_screen: true, las escenas cambian con dt>12 alcanzando 20 frames rápidamente.
-              // Cambiar de color estático una vez en la app Govee dura solo ~0.3s (7 frames) y decae a 0 de inmediato.
+            } else if (consecutiveStrongVideoFrames >= 10 || consecutiveVideoFrames >= 12) {
+              // Conmuta a Vídeo ante ~0.4s..0.5s de actividad de vídeo sostenida.
+              // En modo Vídeo full_screen: true, las escenas cambian con dt>12 alcanzando 10 frames rápidamente.
               targetCandidate = "Vídeo";
             }
           } else if (currentMode == "Vídeo") {
