@@ -670,28 +670,41 @@ interval:
             return;
           }
 
-          // Suavizado temporal IIR (75/25): respuesta suave, colores 100% auténticos y sincronizados
+          // Suavizado temporal IIR adaptativo:
+          // Para micro-variaciones y oscilaciones de balance de blancos de la cámara (< 28),
+          // aplica filtrado profundo (7/8) que estabiliza por completo tonos pasteles y neutros (rosado vs blanquecino).
+          // Para transiciones reales de escena (>= 28), aplica respuesta rápida (3/4).
+          auto smoothAdaptive = [](int currentF, int newTarget) -> int {
+            if (currentF < 0) return newTarget;
+            int diff = abs(newTarget - currentF);
+            if (diff < 28) {
+              return (currentF * 7 + newTarget + 4) / 8;
+            } else {
+              return (currentF * 3 + newTarget + 2) / 4;
+            }
+          };
+
           if (fIzqR < 0) {
             fIzqR = izqR; fIzqG = izqG; fIzqB = izqB;
             fSupR = supR; fSupG = supG; fSupB = supB;
             fCenR = cenR; fCenG = cenG; fCenB = cenB;
             fDerR = derR; fDerG = derG; fDerB = derB;
           } else {
-            fIzqR = (fIzqR * 3 + izqR) / 4;
-            fIzqG = (fIzqG * 3 + izqG) / 4;
-            fIzqB = (fIzqB * 3 + izqB) / 4;
+            fIzqR = smoothAdaptive(fIzqR, izqR);
+            fIzqG = smoothAdaptive(fIzqG, izqG);
+            fIzqB = smoothAdaptive(fIzqB, izqB);
 
-            fSupR = (fSupR * 3 + supR) / 4;
-            fSupG = (fSupG * 3 + supG) / 4;
-            fSupB = (fSupB * 3 + supB) / 4;
+            fSupR = smoothAdaptive(fSupR, supR);
+            fSupG = smoothAdaptive(fSupG, supG);
+            fSupB = smoothAdaptive(fSupB, supB);
 
-            fCenR = (fCenR * 3 + cenR) / 4;
-            fCenG = (fCenG * 3 + cenG) / 4;
-            fCenB = (fCenB * 3 + cenB) / 4;
+            fCenR = smoothAdaptive(fCenR, cenR);
+            fCenG = smoothAdaptive(fCenG, cenG);
+            fCenB = smoothAdaptive(fCenB, cenB);
 
-            fDerR = (fDerR * 3 + derR) / 4;
-            fDerG = (fDerG * 3 + derG) / 4;
-            fDerB = (fDerB * 3 + derB) / 4;
+            fDerR = smoothAdaptive(fDerR, derR);
+            fDerG = smoothAdaptive(fDerG, derG);
+            fDerB = smoothAdaptive(fDerB, derB);
           }
 
           static uint32_t lastSendIzq = 0;
@@ -715,11 +728,11 @@ interval:
 
           bool sentAny = false;
 
-          // Disparo ante cambios reales significativos (delta >= 16 o suma vectorial >= 25)
+          // Disparo ante cambios reales significativos (delta >= 18 o suma vectorial >= 28)
           int dR_izq = abs(fIzqR - pIzqR);
           int dG_izq = abs(fIzqG - pIzqG);
           int dB_izq = abs(fIzqB - pIzqB);
-          bool chgIzq = (dR_izq >= 16 || dG_izq >= 16 || dB_izq >= 16 || (dR_izq + dG_izq + dB_izq >= 25));
+          bool chgIzq = (dR_izq >= 18 || dG_izq >= 18 || dB_izq >= 18 || (dR_izq + dG_izq + dB_izq >= 28));
           if ((chgIzq || (force && (dR_izq >= 4 || dG_izq >= 4 || dB_izq >= 4))) &&
               (now - lastSendIzq >= minInterval || (force && chgIzq))) {
             id(enviar_color_ha)->execute("light.comedor_luces_izquierda", fIzqR, fIzqG, fIzqB, trans);
@@ -731,7 +744,7 @@ interval:
           int dR_der = abs(fDerR - pDerR);
           int dG_der = abs(fDerG - pDerG);
           int dB_der = abs(fDerB - pDerB);
-          bool chgDer = (dR_der >= 16 || dG_der >= 16 || dB_der >= 16 || (dR_der + dG_der + dB_der >= 25));
+          bool chgDer = (dR_der >= 18 || dG_der >= 18 || dB_der >= 18 || (dR_der + dG_der + dB_der >= 28));
           if ((chgDer || (force && (dR_der >= 4 || dG_der >= 4 || dB_der >= 4))) &&
               (now - lastSendDer >= minInterval || (force && chgDer))) {
             id(enviar_color_ha)->execute("light.comedor_luces_derecha", fDerR, fDerG, fDerB, trans);
@@ -743,7 +756,7 @@ interval:
           int dR_cen = abs(fCenR - pCenR);
           int dG_cen = abs(fCenG - pCenG);
           int dB_cen = abs(fCenB - pCenB);
-          bool chgCen = (dR_cen >= 16 || dG_cen >= 16 || dB_cen >= 16 || (dR_cen + dG_cen + dB_cen >= 25));
+          bool chgCen = (dR_cen >= 18 || dG_cen >= 18 || dB_cen >= 18 || (dR_cen + dG_cen + dB_cen >= 28));
           if ((chgCen || (force && (dR_cen >= 4 || dG_cen >= 4 || dB_cen >= 4))) &&
               (now - lastSendCen >= minInterval || (force && chgCen))) {
             id(enviar_color_ha)->execute("light.comedor_luces_centro", fCenR, fCenG, fCenB, trans);
@@ -756,7 +769,7 @@ interval:
             int dR_sup = abs(fSupR - pSupR);
             int dG_sup = abs(fSupG - pSupG);
             int dB_sup = abs(fSupB - pSupB);
-            bool chgSup = (dR_sup >= 16 || dG_sup >= 16 || dB_sup >= 16 || (dR_sup + dG_sup + dB_sup >= 25));
+            bool chgSup = (dR_sup >= 18 || dG_sup >= 18 || dB_sup >= 18 || (dR_sup + dG_sup + dB_sup >= 28));
             if ((chgSup || (force && (dR_sup >= 4 || dG_sup >= 4 || dB_sup >= 4))) &&
                 (now - lastSendSup >= minInterval || (force && chgSup))) {
               id(enviar_color_ha)->execute("light.comedor_luces_techo", fSupR, fSupG, fSupB, trans);
