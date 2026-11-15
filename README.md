@@ -238,8 +238,8 @@ The Govee T1 camera box computes corners on-the-fly, introducing internal pauses
 * **Frame Format:** 37 LEDs total (1 preamble LED + 36 active perimeter LEDs: Left=7, Top=11, Right=7, Bottom=11).
 * **Color Encoding:** Native GRB order (Byte 0 = Green, Byte 1 = Red, Byte 2 = Blue).
 
-### 4. Digital Signal Processing: Spatial + 5-Tap Temporal Median, Head-of-Frame Anchor & Coherent State Engine (v1.4.0 Milestone)
-TV cameras and single-wire WS2811 taps without a common ground (GND) face two distinct challenges: CMOS sensor jitter and $50/60\text{ Hz}$ floating-ground beat interference across the $1.11\text{ ms}$ WS2811 packet. Version `v1.4.0` introduces a 4-pillar DSP architecture:
+### 4. Digital Signal Processing: Spatial + 5-Tap Temporal Median, Head-of-Frame Anchor & Coherent State Engine (v1.3.0 Milestone)
+TV cameras and single-wire WS2811 taps without a common ground (GND) face two distinct challenges: CMOS sensor jitter and $50/60\text{ Hz}$ floating-ground beat interference across the $1.11\text{ ms}$ WS2811 packet. Version `v1.3.0` introduces a 4-pillar DSP architecture:
 * **Per-Edge Spatial Median (`calcZoneTrimmed`) + Permanent 5-Tap Temporal Median (`median5`):**
   Each border (`IZQ` 7 LEDs, `SUP` 11 LEDs, `DER` 7 LEDs, `CEN` 11 LEDs) sorts its raw LED values every frame and averages only the **3 central LEDs** (discarding the 4 lowest and 4 highest LEDs in 11-LED zones and the 2 lowest/highest in 7-LED zones), followed by a continuous **5-frame ($200\text{ ms}$) temporal median filter** that stays active 24/7 even when `switch.1_ambilight_mode` is turned off.
 * **Physical WS2811 Head-of-Frame Anchor (`isHeadFrozenUniform` & `isIzqDerFrozenUniform`):**
