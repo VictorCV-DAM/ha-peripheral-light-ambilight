@@ -682,17 +682,23 @@ interval:
           bool force = (now - lastForceSend > 15000);
 
           float trans = id(velocidad_transicion).state;
-          uint32_t minInterval = 60;
+          uint32_t minInterval = 100;
           if (trans > 0.01f) {
-            minInterval = (uint32_t)(trans * 750.0f);
-            if (minInterval < 60) minInterval = 60;
+            // El intervalo mínimo entre comandos debe superar el tiempo de transición (+40ms de margen)
+            // para que las bombillas Wi-Fi completen su ciclo de fundido antes de recibir el siguiente color,
+            // evitando interrupciones de PWM a mitad de camino que provocan parpadeos perceptibles.
+            minInterval = (uint32_t)(trans * 1000.0f) + 40;
+            if (minInterval < 100) minInterval = 100;
           }
 
           bool sentAny = false;
 
-          // Disparo ante cambios reales (delta >= 12)
-          bool chgIzq = (abs(fIzqR - pIzqR) >= 12 || abs(fIzqG - pIzqG) >= 12 || abs(fIzqB - pIzqB) >= 12);
-          if ((chgIzq || (force && (abs(fIzqR - pIzqR) >= 4 || abs(fIzqG - pIzqG) >= 4 || abs(fIzqB - pIzqB) >= 4))) &&
+          // Disparo ante cambios reales significativos (delta >= 16 o suma vectorial >= 25)
+          int dR_izq = abs(fIzqR - pIzqR);
+          int dG_izq = abs(fIzqG - pIzqG);
+          int dB_izq = abs(fIzqB - pIzqB);
+          bool chgIzq = (dR_izq >= 16 || dG_izq >= 16 || dB_izq >= 16 || (dR_izq + dG_izq + dB_izq >= 25));
+          if ((chgIzq || (force && (dR_izq >= 4 || dG_izq >= 4 || dB_izq >= 4))) &&
               (now - lastSendIzq >= minInterval || (force && chgIzq))) {
             id(enviar_color_ha)->execute("light.comedor_luces_izquierda", fIzqR, fIzqG, fIzqB, trans);
             pIzqR = fIzqR; pIzqG = fIzqG; pIzqB = fIzqB;
@@ -700,8 +706,11 @@ interval:
             sentAny = true;
           }
 
-          bool chgDer = (abs(fDerR - pDerR) >= 12 || abs(fDerG - pDerG) >= 12 || abs(fDerB - pDerB) >= 12);
-          if ((chgDer || (force && (abs(fDerR - pDerR) >= 4 || abs(fDerG - pDerG) >= 4 || abs(fDerB - pDerB) >= 4))) &&
+          int dR_der = abs(fDerR - pDerR);
+          int dG_der = abs(fDerG - pDerG);
+          int dB_der = abs(fDerB - pDerB);
+          bool chgDer = (dR_der >= 16 || dG_der >= 16 || dB_der >= 16 || (dR_der + dG_der + dB_der >= 25));
+          if ((chgDer || (force && (dR_der >= 4 || dG_der >= 4 || dB_der >= 4))) &&
               (now - lastSendDer >= minInterval || (force && chgDer))) {
             id(enviar_color_ha)->execute("light.comedor_luces_derecha", fDerR, fDerG, fDerB, trans);
             pDerR = fDerR; pDerG = fDerG; pDerB = fDerB;
@@ -709,8 +718,11 @@ interval:
             sentAny = true;
           }
 
-          bool chgCen = (abs(fCenR - pCenR) >= 12 || abs(fCenG - pCenG) >= 12 || abs(fCenB - pCenB) >= 12);
-          if ((chgCen || (force && (abs(fCenR - pCenR) >= 4 || abs(fCenG - pCenG) >= 4 || abs(fCenB - pCenB) >= 4))) &&
+          int dR_cen = abs(fCenR - pCenR);
+          int dG_cen = abs(fCenG - pCenG);
+          int dB_cen = abs(fCenB - pCenB);
+          bool chgCen = (dR_cen >= 16 || dG_cen >= 16 || dB_cen >= 16 || (dR_cen + dG_cen + dB_cen >= 25));
+          if ((chgCen || (force && (dR_cen >= 4 || dG_cen >= 4 || dB_cen >= 4))) &&
               (now - lastSendCen >= minInterval || (force && chgCen))) {
             id(enviar_color_ha)->execute("light.comedor_luces_centro", fCenR, fCenG, fCenB, trans);
             pCenR = fCenR; pCenG = fCenG; pCenB = fCenB;
@@ -719,8 +731,11 @@ interval:
           }
 
           if (id(activar_techo).state) {
-            bool chgSup = (abs(fSupR - pSupR) >= 12 || abs(fSupG - pSupG) >= 12 || abs(fSupB - pSupB) >= 12);
-            if ((chgSup || (force && (abs(fSupR - pSupR) >= 4 || abs(fSupG - pSupG) >= 4 || abs(fSupB - pSupB) >= 4))) &&
+            int dR_sup = abs(fSupR - pSupR);
+            int dG_sup = abs(fSupG - pSupG);
+            int dB_sup = abs(fSupB - pSupB);
+            bool chgSup = (dR_sup >= 16 || dG_sup >= 16 || dB_sup >= 16 || (dR_sup + dG_sup + dB_sup >= 25));
+            if ((chgSup || (force && (dR_sup >= 4 || dG_sup >= 4 || dB_sup >= 4))) &&
                 (now - lastSendSup >= minInterval || (force && chgSup))) {
               id(enviar_color_ha)->execute("light.comedor_luces_techo", fSupR, fSupG, fSupB, trans);
               pSupR = fSupR; pSupG = fSupG; pSupB = fSupB;
