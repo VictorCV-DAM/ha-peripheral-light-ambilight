@@ -586,6 +586,11 @@ interval:
 
           // Integrador Leaky-Bucket compatible tanto con Vídeo Multizona (Part) como Vídeo Pantalla Completa (full_screen: true):
           static uint32_t lastVideoActivityTime = 0;
+          static int staticRefR = -1, staticRefG = -1, staticRefB = -1;
+          static int staticAnchorR = -1, staticAnchorG = -1, staticAnchorB = -1;
+          static int uniformShiftFrames = 0;
+          static int uniformColorChanges = 0;
+          static uint32_t lastUniformChangeTime = 0;
           int spatialContrast = 0;
           bool isPerimeterUniform = false;
 
@@ -594,6 +599,7 @@ interval:
           } else if (isBlack) {
             if (consecutiveVideoFrames > 0) consecutiveVideoFrames--;
             if (consecutiveStaticFrames > 0) consecutiveStaticFrames--;
+            uniformShiftFrames = 0;
           } else {
             // Contraste espacial perimetral directo:
             int dColorLR = abs(izqR - derR) + abs(izqG - derG) + abs(izqB - derB);
@@ -606,16 +612,49 @@ interval:
             // 2. isPerimeterUniform: Todos los bordes tienen el mismo color.
             isPerimeterUniform = (dColorIS <= 16 && dColorLR <= 20 && rawSpread <= 28);
 
-            // 3. hasHeadMotion: Cambio dinámico real en los primeros 18 LEDs (IZQ + SUP).
-            //    Cubre el modo Vídeo full_screen: true y las transiciones de escena en vídeo,
-            //    ignorando atenuaciones lentas de brillo (low_brightness).
+            // 3. isCoherentFullStripMotion: Las 4 zonas cambian al unísono manteniendo el mismo color en toda la tira
+            //    (ej. modo Vídeo full_screen: true donde contrast=0..12 y dt >= 12 en toda la tira a la vez).
+            //    El ruido de 50Hz sin GND jamás desplaza las 4 zonas al mismo RGB simultáneamente.
+            bool isCoherentFullStripMotion = (spatialContrast <= 12 && rawSpread <= 16 &&
+                                              tempDelta >= 12 && deltaIzq >= 2 && deltaSup >= 2 && deltaDer >= 2);
+
+            // 4. Referencia de color para medir deriva cromática/brillo en planos suaves de Vídeo full_screen: true:
+            if (staticRefR < 0 || consecutiveStaticFrames == 0) {
+              staticRefR = izqR; staticRefG = izqG; staticRefB = izqB;
+            }
+            int dFromStaticRef = abs(izqR - staticRefR) + abs(izqG - staticRefG) + abs(izqB - staticRefB);
+
+            // Ancla del modo Estático para detectar cambios sucesivos de escena en full_screen: true sin falsos positivos:
+            if (staticAnchorR < 0 || currentMode != "Estático") {
+              staticAnchorR = izqR; staticAnchorG = izqG; staticAnchorB = izqB;
+              uniformShiftFrames = 0;
+              uniformColorChanges = 0;
+            } else {
+              if (now - lastUniformChangeTime > 30000) {
+                uniformColorChanges = 0;
+              }
+              int dFromAnchor = abs(izqR - staticAnchorR) + abs(izqG - staticAnchorG) + abs(izqB - staticAnchorB);
+              if (spatialContrast <= 12 && rawSpread <= 16 && dFromAnchor >= 16) {
+                uniformShiftFrames++;
+                if (uniformShiftFrames >= 4) {
+                  uniformColorChanges++;
+                  lastUniformChangeTime = now;
+                  staticAnchorR = izqR; staticAnchorG = izqG; staticAnchorB = izqB;
+                  uniformShiftFrames = 0;
+                }
+              } else {
+                uniformShiftFrames = 0;
+              }
+            }
+
+            // 5. hasHeadMotion: Cambio dinámico fuerte en los primeros 18 LEDs (IZQ + SUP).
             bool hasHeadMotion = (headDelta >= 22 || (deltaIzq >= 12 && deltaSup >= 12));
 
-            // 4. isVideoActivity: Actividad de vídeo tanto multizona como pantalla completa.
+            // 6. isVideoActivity: Actividad de vídeo tanto multizona como pantalla completa.
             bool isVideoActivity = (hasSpatialDiversity || hasHeadMotion);
 
-            // 5. isTrulyStatic: Perímetro uniforme y congelado en la cabeza de la tira (IZQ + SUP + DER).
-            bool isTrulyStatic = (dColorIS <= 14 && dColorLR <= 18 && headDelta <= 8 && tempDelta <= 16);
+            // 7. isTrulyStatic: Perímetro uniforme, congelado frame a frame y sin deriva respecto a staticRef:
+            bool isTrulyStatic = (dColorIS <= 14 && dColorLR <= 18 && headDelta <= 8 && tempDelta <= 12 && dFromStaticRef <= 12);
 
             if (hasSpatialDiversity) {
               consecutiveStrongVideoFrames++;
@@ -633,14 +672,19 @@ interval:
               consecutiveVideoFrames = std::max(0, consecutiveVideoFrames - 3);
             }
 
-            if (isTrulyStatic) {
+            if (isCoherentFullStripMotion || (isPerimeterUniform && dFromStaticRef >= 14) ||
+                (hasSpatialDiversity && consecutiveStrongVideoFrames >= 4) ||
+                (isVideoActivity && consecutiveVideoFrames >= 8)) {
+              // En modo Vídeo (tanto multizona como full_screen: true), cualquier corte de plano (dt>=12 con contrast<=12)
+              // o deriva de color/brillo de cámara (>=14 respecto a staticRef) reinicia sF a 0 inmediatamente:
+              consecutiveStaticFrames = 0;
+              staticRefR = izqR; staticRefG = izqG; staticRefB = izqB;
+            } else if (isTrulyStatic) {
               consecutiveStaticFrames++;
               if (consecutiveStaticFrames >= 12) {
                 consecutiveVideoFrames = 0;
                 consecutiveStrongVideoFrames = 0;
               }
-            } else if (isVideoActivity && consecutiveVideoFrames >= 14) {
-              consecutiveStaticFrames = 0;
             } else if (isVideoActivity) {
               consecutiveStaticFrames = std::max(0, consecutiveStaticFrames - 3);
             }
@@ -669,9 +713,9 @@ interval:
             if (consecutiveBlackFrames >= 100) {
               // Pantalla/tira apagada en negro durante ~4.0s -> Standby
               targetCandidate = "Standby";
-            } else if (consecutiveStrongVideoFrames >= 35 || consecutiveVideoFrames >= 40) {
-              // Requiere ~1.4s..1.6s de actividad continua real (+1/frame) sin 12 frames limpios.
-              // Las ráfagas de batimiento de 50Hz sin GND duran a lo sumo 0.3s..0.5s y se borran (-3/frame) de inmediato.
+            } else if (consecutiveStrongVideoFrames >= 35 || consecutiveVideoFrames >= 40 || uniformColorChanges >= 2) {
+              // Conmuta a Vídeo ante ~1.4s..1.6s de actividad multizona/dinámica continua,
+              // o ante >=2 cambios uniformes verificados de color en toda la tira (modo Vídeo full_screen: true).
               targetCandidate = "Vídeo";
             }
           } else if (currentMode == "Vídeo") {
@@ -701,6 +745,10 @@ interval:
               consecutiveStrongVideoFrames = 0;
               consecutiveStaticFrames = 0;
               consecutiveBlackFrames = 0;
+              uniformShiftFrames = 0;
+              uniformColorChanges = 0;
+              staticRefR = izqR; staticRefG = izqG; staticRefB = izqB;
+              staticAnchorR = izqR; staticAnchorG = izqG; staticAnchorB = izqB;
             }
             id(govee_hardware_state).publish_state(currentMode);
             id(govee_signal_active).publish_state(currentSignalActive);
