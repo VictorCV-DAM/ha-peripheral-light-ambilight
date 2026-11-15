@@ -607,7 +607,7 @@ interval:
 
           // Evitar desbordamiento de contadores:
           consecutiveVideoFrames = std::min(consecutiveVideoFrames, 80);
-          consecutiveStaticFrames = std::min(consecutiveStaticFrames, 150);
+          consecutiveStaticFrames = std::min(consecutiveStaticFrames, 400);
           consecutiveBlackFrames = std::min(consecutiveBlackFrames, 50);
 
           std::string targetCandidate = currentMode;
@@ -636,9 +636,10 @@ interval:
             if (consecutiveBlackFrames >= 25) {
               // ~1.0s de negro absoluto sostenido -> Standby
               targetCandidate = "Standby";
-            } else if (consecutiveStaticFrames >= 70 && (now - lastVideoActivityTime >= 2800)) {
-              // Exige 2.8s (70 frames a 40ms) de INMOVILIDAD TOTAL CONTINUA (sin contraste y tempDelta <= 15)
-              // para pasar a Estático. Si una escena de vídeo se mueve, nunca conmuta a Estático.
+            } else if (consecutiveStaticFrames >= 250 && (now - lastVideoActivityTime >= 10000)) {
+              // Estabilidad definitiva: exige 10.0s (250 frames a 40ms) de INMOVILIDAD TOTAL CONTINUA
+              // (sin contraste y tempDelta <= 15) para pasar a Estático.
+              // Durante cualquier vídeo o película, el modo Vídeo permanece bloqueado sin falsas caídas.
               targetCandidate = "Estático";
             }
           }
