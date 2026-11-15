@@ -443,6 +443,28 @@ interval:
           cenG = median3(hCenG[0], hCenG[1], hCenG[2]);
           cenB = median3(hCenB[0], hCenB[1], hCenB[2]);
 
+          // Compresión cromática suave para escenas dominantemente rojas:
+          // En escenas rojas de TV, la cámara Govee capta bleed óptico de verde (G=35..60).
+          // En tiras LED RGB como la del comedor, ese verde residual enciende los LEDs verdes
+          // provocando un microparpadeo amarillento.
+          // Aplicamos una curva polinómica cúbica suave (sin saltos ni umbrales duros)
+          // que atenúa el ruido de G por debajo de 80 cuando R domina netamente.
+          auto smoothRedPurity = [](int &r, int &g, int &b) {
+            if (r >= 90 && b < 50 && g < 80 && (r > g * 2)) {
+              float rg = (float)g / 80.0f;
+              g = (int)(g * rg * rg);
+              if (b < 35) {
+                float rb = (float)b / 35.0f;
+                b = (int)(b * rb * rb);
+              }
+            }
+          };
+
+          smoothRedPurity(izqR, izqG, izqB);
+          smoothRedPurity(supR, supG, supB);
+          smoothRedPurity(derR, derG, derB);
+          smoothRedPurity(cenR, cenG, cenB);
+
           // Detección del estado real del hardware (Vídeo vs Estático vs Standby)
           int maxOverall = std::max({izqR, izqG, izqB, supR, supG, supB, derR, derG, derB, cenR, cenG, cenB});
           bool isBlack = (maxOverall <= 4);
