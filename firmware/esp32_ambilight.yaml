@@ -564,17 +564,16 @@ interval:
             spatialContrast = std::max(dColorLR, dColorTC);
 
             // Detección de Dinamismo y Dispersión Calibrada:
-            // 1. isStrongVideo: Contraste espacial multizona real entre lados opuestos de la TV (>= 45).
-            bool isStrongVideo = (spatialContrast >= 45);
+            // 1. isStrongVideo: Contraste espacial multizona real entre lados opuestos de la TV (>= 38).
+            bool isStrongVideo = (spatialContrast >= 38);
 
-            // 2. isDynamicMotion: Dinamismo temporal continuo (movimiento sostenido en pantalla).
-            //    En estático puro con filtro mediana: tempDelta <= 10.
-            //    Al cambiar de color/brillo en la app Govee, el pico de dt dura solo 1..2 frames (<80ms).
-            //    En vídeo real o transiciones de color continuas: tempDelta >= 35.
-            bool isDynamicMotion = (tempDelta >= 35);
+            // 2. isDynamicVideo: Contraste espacial moderado (>= 24) con dinamismo temporal (tempDelta >= 35).
+            //    REGLA DE ORO: Si spatialContrast < 24, todos los LEDs tienen el mismo color perimetral (modo estático).
+            //    Por lo tanto, NUNCA se clasifica como vídeo cuando el contraste espacial es bajo, impidiendo cualquier rebote.
+            bool isDynamicVideo = (spatialContrast >= 24 && tempDelta >= 35);
 
             // 3. isVideoActivity:
-            bool isVideoActivity = (isStrongVideo || isDynamicMotion);
+            bool isVideoActivity = (isStrongVideo || isDynamicVideo);
 
             if (isStrongVideo) {
               consecutiveStrongVideoFrames++;
@@ -600,7 +599,7 @@ interval:
 
           // Evitar desbordamiento de contadores:
           consecutiveVideoFrames = std::min(consecutiveVideoFrames, 80);
-          consecutiveStaticFrames = std::min(consecutiveStaticFrames, 300);
+          consecutiveStaticFrames = std::min(consecutiveStaticFrames, 150);
           consecutiveBlackFrames = std::min(consecutiveBlackFrames, 50);
 
           std::string targetCandidate = currentMode;
@@ -608,7 +607,7 @@ interval:
           if (currentMode == "Standby") {
             // Salida instantánea de Standby al detectar luz/señal continua (>20 frames encendidos ~800ms):
             if (!isBlack && consecutiveAwakeFrames >= 20) {
-              if (consecutiveStrongVideoFrames >= 8 || consecutiveVideoFrames >= 20) {
+              if (consecutiveStrongVideoFrames >= 6 || consecutiveVideoFrames >= 15) {
                 targetCandidate = "Vídeo";
               } else {
                 targetCandidate = "Estático";
@@ -619,9 +618,8 @@ interval:
             if (consecutiveBlackFrames >= 25) {
               // Pantalla/tira apagada en negro durante ~1.0s -> Standby
               targetCandidate = "Standby";
-            } else if (consecutiveStrongVideoFrames >= 8 || consecutiveVideoFrames >= 25) {
-              // Con 8 frames (~320ms) de contraste multizona O 25 frames (~1.0s) de dinamismo continuo conmuta a Vídeo.
-              // Un toque de color en la app Govee dura solo 1..2 frames (80ms), por lo que nunca dispara Vídeo.
+            } else if (consecutiveStrongVideoFrames >= 6 || consecutiveVideoFrames >= 15) {
+              // Con 6 frames (~240ms) de contraste multizona real (>=38) conmuta inmediatamente a Vídeo
               targetCandidate = "Vídeo";
             }
           } else if (currentMode == "Vídeo") {
@@ -629,9 +627,8 @@ interval:
             if (consecutiveBlackFrames >= 25) {
               // ~1.0s de negro absoluto sostenido -> Standby
               targetCandidate = "Standby";
-            } else if (consecutiveStaticFrames >= 175 && (now - lastVideoActivityTime >= 7000)) {
-              // Histéresis cinematográfica: en una película un plano estático dura fácilmente 2..5s.
-              // Exige 7.0s (175 frames de 40ms) ininterrumpidos de quietud absoluta para pasar a Estático.
+            } else if (consecutiveStaticFrames >= 60 && (now - lastVideoActivityTime >= 2400)) {
+              // Con 2.4s (60 frames a 40ms) de uniformidad perimetral o quietud conmuta a Estático de forma ágil y natural
               targetCandidate = "Estático";
             }
           }
