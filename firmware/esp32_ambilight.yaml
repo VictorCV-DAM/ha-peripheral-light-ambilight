@@ -297,6 +297,7 @@ interval:
           static uint32_t lastFrameInterval = 0;
           static bool currentSignalActive = false;
           static std::string currentMode = "Standby";
+          static std::string previousActiveMode = "Vídeo";
           static int consecutiveVideoFrames = 0;
           static int consecutiveStaticFrames = 0;
           static int consecutiveStrongVideoFrames = 0;
@@ -316,10 +317,10 @@ interval:
             }
             prevFrameTime = now;
           } else {
-            // Si la línea está en silencio más de 2s -> Standby automático rápido:
-            if (now - lastValidFrameTime > 2000) {
+            // Si la línea está en silencio más de 5s -> Standby automático:
+            if (now - lastValidFrameTime > 5000) {
               if (currentMode != "Standby") {
-                ESP_LOGW("mode", "CAMBIO DE ESTADO: %s -> Standby (sin señal > 2s)", currentMode.c_str());
+                ESP_LOGW("mode", "CAMBIO DE ESTADO: %s -> Standby (sin señal > 5s)", currentMode.c_str());
                 currentMode = "Standby";
                 currentSignalActive = false;
                 consecutiveVideoFrames = 0;
@@ -551,6 +552,7 @@ interval:
           // Integrador Leaky-Bucket Asimétrico con límites de saturación:
           static uint32_t lastVideoActivityTime = 0;
           int spatialContrast = 0;
+          bool isPerimeterUniform = false;
 
           if (isTransientBlackDrop) {
             // Ignorar micro-corte de 1..3 frames sin destruir sF ni vF
@@ -568,17 +570,21 @@ interval:
             //    En estático puro o color fijo: dColorLR <= 10. En vídeo multizona: dColorLR >= 35..250.
             bool hasSpatialDiversity = (dColorLR >= 35 || (dColorLR >= 20 && dColorTC >= 50) || dColorTC >= 100);
 
-            // 2. hasMotion: Dinamismo temporal continuo (el color cambia de fotograma a fotograma).
-            //    En estático puro con filtro mediana: tempDelta <= 12.
-            //    En vídeo real en movimiento: tempDelta >= 28.
-            bool hasMotion = (tempDelta >= 28);
+            // 2. isPerimeterUniform: El perímetro es homogéneo (todas las zonas tienen el mismo tono).
+            //    En modo Estático/Color de la app Govee, todos los lados son idénticos.
+            isPerimeterUniform = (dColorLR < 20 && dColorTC < 35);
 
-            // 3. isVideoActivity: Hay actividad si la imagen tiene contraste multizona O si se está moviendo en el tiempo.
+            // 3. hasMotion: Movimiento temporal continuo.
+            //    CRÍTICO: Si el perímetro es uniforme (spatialContrast < 20), cualquier cambio temporal
+            //    proviene de un ajuste del control deslizante de color/brillo en la app Govee (modo estático),
+            //    ¡NUNCA de vídeo! Solo es movimiento de vídeo si coexiste con contraste espacial.
+            bool hasMotion = (tempDelta >= 28 && spatialContrast >= 20);
+
+            // 4. isVideoActivity: Hay actividad si hay contraste espacial multizona O movimiento con contraste.
             bool isVideoActivity = (hasSpatialDiversity || hasMotion);
 
-            // 4. isTrulyStatic: Una imagen es estática SOLO si NO tiene contraste multizona Y NO se está moviendo.
-            //    Si la imagen está cambiando de color en el tiempo (tempDelta > 15), NUNCA es estática.
-            bool isTrulyStatic = (!hasSpatialDiversity && tempDelta <= 15);
+            // 5. isTrulyStatic: Es estático si el perímetro se mantiene uniforme.
+            bool isTrulyStatic = isPerimeterUniform;
 
             if (hasSpatialDiversity) {
               consecutiveStrongVideoFrames++;
@@ -606,40 +612,42 @@ interval:
           }
 
           // Evitar desbordamiento de contadores:
-          consecutiveVideoFrames = std::min(consecutiveVideoFrames, 80);
-          consecutiveStaticFrames = std::min(consecutiveStaticFrames, 400);
-          consecutiveBlackFrames = std::min(consecutiveBlackFrames, 50);
+          consecutiveVideoFrames = std::min(consecutiveVideoFrames, 100);
+          consecutiveStaticFrames = std::min(consecutiveStaticFrames, 300);
+          consecutiveBlackFrames = std::min(consecutiveBlackFrames, 150);
 
           std::string targetCandidate = currentMode;
 
           if (currentMode == "Standby") {
-            // Salida instantánea de Standby al detectar luz/señal continua (>20 frames encendidos ~800ms):
+            // Salida de Standby al detectar luz/señal continua (>20 frames encendidos ~800ms):
             if (!isBlack && consecutiveAwakeFrames >= 20) {
               if (consecutiveStrongVideoFrames >= 10 || consecutiveVideoFrames >= 20) {
                 targetCandidate = "Vídeo";
-              } else {
+              } else if (isPerimeterUniform && consecutiveStaticFrames >= 20) {
                 targetCandidate = "Estático";
+              } else {
+                targetCandidate = previousActiveMode;
               }
             }
           } else if (currentMode == "Estático") {
             // Estando en Estático:
-            if (consecutiveBlackFrames >= 25) {
-              // Pantalla/tira apagada en negro durante ~1.0s -> Standby
+            if (consecutiveBlackFrames >= 100) {
+              // Pantalla/tira apagada en negro durante ~4.0s -> Standby
               targetCandidate = "Standby";
-            } else if (consecutiveStrongVideoFrames >= 12 || consecutiveVideoFrames >= 35) {
-              // Con 12 frames (~480ms) de contraste multizona O 35 frames (~1.4s) de movimiento continuo conmuta a Vídeo.
-              // Un toque de color en la app Govee cambia en solo 1..2 frames, por lo que nunca alcanza 35 frames.
+            } else if (consecutiveStrongVideoFrames >= 15 || consecutiveVideoFrames >= 35) {
+              // Con 15 frames (~600ms) de contraste multizona fuerte O 35 frames (~1.4s) de contraste continuo conmuta a Vídeo.
+              // Los cambios de color/brillo en la app Govee tienen spatialContrast < 20, por lo que nunca conmutan a Vídeo.
               targetCandidate = "Vídeo";
             }
           } else if (currentMode == "Vídeo") {
             // Estando en Vídeo:
-            if (consecutiveBlackFrames >= 25) {
-              // ~1.0s de negro absoluto sostenido -> Standby
+            if (consecutiveBlackFrames >= 100) {
+              // ~4.0s de negro absoluto sostenido -> Standby
               targetCandidate = "Standby";
-            } else if (consecutiveStaticFrames >= 250 && (now - lastVideoActivityTime >= 10000)) {
-              // Estabilidad definitiva: exige 10.0s (250 frames a 40ms) de INMOVILIDAD TOTAL CONTINUA
-              // (sin contraste y tempDelta <= 15) para pasar a Estático.
-              // Durante cualquier vídeo o película, el modo Vídeo permanece bloqueado sin falsas caídas.
+            } else if (consecutiveStaticFrames >= 75 && (now - lastVideoActivityTime >= 3000)) {
+              // Transición a Estático: 3.0s (75 frames a 40ms) de perímetro 100% uniforme.
+              // Rápido y reactivo al cambiar a modo color en la app Govee,
+              // e inmune a pausas cortas o destellos en películas.
               targetCandidate = "Estático";
             }
           }
@@ -651,6 +659,9 @@ interval:
                        consecutiveVideoFrames, consecutiveStaticFrames, consecutiveBlackFrames);
               currentMode = targetCandidate;
               currentSignalActive = (currentMode != "Standby");
+              if (currentMode != "Standby") {
+                previousActiveMode = currentMode;
+              }
               consecutiveVideoFrames = 0;
               consecutiveStaticFrames = 0;
               consecutiveBlackFrames = 0;
