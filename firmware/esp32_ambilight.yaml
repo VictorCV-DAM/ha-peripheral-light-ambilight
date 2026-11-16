@@ -593,6 +593,8 @@ interval:
           static uint32_t lastUniformChangeTime = 0;
           int spatialContrast = 0;
           bool isPerimeterUniform = false;
+          bool isCoherentFullStripMotion = false;
+          bool isTrulyStatic = false;
           int dFromStaticRef = 0;
 
           if (isTransientBlackDrop) {
@@ -616,7 +618,7 @@ interval:
             // 3. isCoherentFullStripMotion: Las 4 zonas cambian al unísono manteniendo el mismo color en toda la tira
             //    (ej. modo Vídeo full_screen: true donde contrast=0..12 y dt >= 12 en toda la tira a la vez).
             //    El ruido de 50Hz sin GND jamás desplaza las 4 zonas al mismo RGB simultáneamente.
-            bool isCoherentFullStripMotion = (spatialContrast <= 14 && rawSpread <= 20 &&
+            isCoherentFullStripMotion = (spatialContrast <= 14 && rawSpread <= 20 &&
                                               tempDelta >= 12 && (deltaIzq >= 2 || deltaSup >= 2));
 
             // 4. Referencia de color para medir deriva cromática/brillo en planos suaves de Vídeo full_screen: true:
@@ -629,32 +631,18 @@ interval:
             bool hasHeadMotion = (headDelta >= 22 || (deltaIzq >= 12 && deltaSup >= 12));
 
             // 6. isVideoActivity:
-            //    - Estando en Estático: un cambio de lámpara en la app Govee cambia el color pero mantiene contrast=0
-            //      (isPerimeterUniform). Para conmutar a Vídeo desde Estático se exige contraste espacial multizona
-            //      (hasSpatialDiversity) O que la actividad dinámica se mantenga con desequilibrio de borde (no uniforme).
-            //    - Estando en Vídeo: se admiten cambios de plano coherentes (full_screen: true) para no caer a Estático.
-            bool isVideoActivity;
-            if (currentMode == "Estático") {
-              isVideoActivity = (hasSpatialDiversity || (hasHeadMotion && !isPerimeterUniform));
-            } else {
-              isVideoActivity = (hasSpatialDiversity || hasHeadMotion || isCoherentFullStripMotion || dFromStaticRef >= 16);
-            }
+            //    Detección unificada para Vídeo Multizona (Part) y Vídeo Pantalla Completa (full_screen: true).
+            //    En full_screen: true, contrast=0 pero isCoherentFullStripMotion (dt>=12 en toda la tira)
+            //    o deriva acumulativa (dFromStaticRef>=16) identifican inequívocamente el contenido dinámico.
+            bool isVideoActivity = (hasSpatialDiversity || isCoherentFullStripMotion || hasHeadMotion || dFromStaticRef >= 16);
 
             // 7. isTrulyStatic: Perímetro uniforme, congelado frame a frame y sin deriva respecto a staticRef:
-            bool isTrulyStatic = (dColorIS <= 14 && dColorLR <= 18 && headDelta <= 8 && tempDelta <= 14 && dFromStaticRef <= 12);
+            isTrulyStatic = (isPerimeterUniform && headDelta <= 8 && tempDelta <= 12 && dFromStaticRef <= 12);
 
-            if (currentMode == "Estático") {
-              if (hasSpatialDiversity) {
-                consecutiveStrongVideoFrames++;
-              } else if (isTrulyStatic || isPerimeterUniform) {
-                consecutiveStrongVideoFrames = std::max(0, consecutiveStrongVideoFrames - 3);
-              }
-            } else {
-              if (hasSpatialDiversity || isCoherentFullStripMotion || hasHeadMotion) {
-                consecutiveStrongVideoFrames++;
-              } else if (isTrulyStatic) {
-                consecutiveStrongVideoFrames = std::max(0, consecutiveStrongVideoFrames - 2);
-              }
+            if (hasSpatialDiversity || isCoherentFullStripMotion || (hasHeadMotion && tempDelta >= 10)) {
+              consecutiveStrongVideoFrames++;
+            } else if (isTrulyStatic) {
+              consecutiveStrongVideoFrames = std::max(0, consecutiveStrongVideoFrames - 2);
             }
             consecutiveStrongVideoFrames = std::min(consecutiveStrongVideoFrames, 100);
 
@@ -663,7 +651,7 @@ interval:
               if (consecutiveVideoFrames >= 6) {
                 lastVideoActivityTime = now;
               }
-            } else if (isTrulyStatic || (currentMode == "Estático" && isPerimeterUniform)) {
+            } else if (isTrulyStatic) {
               consecutiveVideoFrames = std::max(0, consecutiveVideoFrames - 3);
             }
 
@@ -693,15 +681,17 @@ interval:
           std::string targetCandidate = currentMode;
 
           if (currentMode == "Standby") {
-            // Salida de Standby al detectar luz/señal continua en la cabeza de la tira (>20 frames ~800ms):
-            if (!isBlack && consecutiveAwakeFrames >= 20) {
-              if (consecutiveStrongVideoFrames >= 8 || consecutiveVideoFrames >= 10) {
+            // Salida de Standby al detectar luz/señal continua en la cabeza de la tira (>15 frames ~600ms):
+            if (!isBlack && consecutiveAwakeFrames >= 15) {
+              if (consecutiveStrongVideoFrames >= 4 || consecutiveVideoFrames >= 6 || tempDelta >= 8 || isCoherentFullStripMotion) {
+                // Hay señal de vídeo activa o cambio de plano -> Vídeo inmediato
                 targetCandidate = "Vídeo";
-              } else if (isPerimeterUniform && consecutiveStaticFrames >= 25 && dFromStaticRef <= 8 && tempDelta <= 6) {
-                // Solo si la tira está 100% congelada y sin cambios de escena entra a Estático
+              } else if (consecutiveStaticFrames >= 25 && isTrulyStatic) {
+                // Solo si la tira está 100% congelada y sin cambios durante ~1 segundo entra a Estático
                 targetCandidate = "Estático";
-              } else {
-                targetCandidate = previousActiveMode;
+              } else if (consecutiveAwakeFrames >= 40) {
+                // Más de 1.5s encendido sin haberse congelado -> Asumir Vídeo (tira ambilight activa)
+                targetCandidate = "Vídeo";
               }
             }
           } else if (currentMode == "Estático") {
@@ -709,9 +699,10 @@ interval:
             if (consecutiveBlackFrames >= 100) {
               // Pantalla/tira apagada en negro durante ~4.0s -> Standby
               targetCandidate = "Standby";
-            } else if (consecutiveStrongVideoFrames >= 25 || consecutiveVideoFrames >= 30) {
-              // Conmuta a Vídeo ante ~1.0s..1.2s de contraste espacial multizona real (hasSpatialDiversity).
-              // Cambiar de color estático en la app Govee (isPerimeterUniform) tiene contrast=0 y se mantiene 100% en Estático.
+            } else if (consecutiveStrongVideoFrames >= 12 || consecutiveVideoFrames >= 16) {
+              // Conmuta a Vídeo ante ~0.5s..0.6s de actividad continua (multizona o full_screen: true).
+              // Un cambio puntual de lámpara en la app Govee se asienta en <0.20s (<5 frames) y decae a 0,
+              // manteniéndose 100% en Estático.
               targetCandidate = "Vídeo";
             }
           } else if (currentMode == "Vídeo") {
@@ -721,8 +712,6 @@ interval:
               targetCandidate = "Standby";
             } else if (consecutiveStaticFrames >= 150) {
               // Transición a Estático: ~6.0s (150 frames) de señal perimetral uniforme y congelada.
-              // Evita caer a Estático en planos tranquilos de 3..5s durante una película/vídeo,
-              // y entra en Estático de forma continua a los 6s sin reseteos gracias a isHeadFrozenUniform.
               targetCandidate = "Estático";
             }
           }
