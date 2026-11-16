@@ -639,10 +639,18 @@ interval:
             // 7. isTrulyStatic: Perímetro uniforme, congelado frame a frame y sin deriva respecto a staticRef:
             isTrulyStatic = (isPerimeterUniform && headDelta <= 8 && tempDelta <= 12 && dFromStaticRef <= 12);
 
-            if (hasSpatialDiversity || isCoherentFullStripMotion || (hasHeadMotion && tempDelta >= 10)) {
-              consecutiveStrongVideoFrames++;
-            } else if (isTrulyStatic) {
-              consecutiveStrongVideoFrames = std::max(0, consecutiveStrongVideoFrames - 2);
+            if (currentMode == "Estático") {
+              if (hasSpatialDiversity) {
+                consecutiveStrongVideoFrames++;
+              } else if (isTrulyStatic) {
+                consecutiveStrongVideoFrames = std::max(0, consecutiveStrongVideoFrames - 2);
+              }
+            } else {
+              if (hasSpatialDiversity || isCoherentFullStripMotion || (hasHeadMotion && tempDelta >= 10)) {
+                consecutiveStrongVideoFrames++;
+              } else if (isTrulyStatic) {
+                consecutiveStrongVideoFrames = std::max(0, consecutiveStrongVideoFrames - 2);
+              }
             }
             consecutiveStrongVideoFrames = std::min(consecutiveStrongVideoFrames, 100);
 
@@ -699,10 +707,10 @@ interval:
             if (consecutiveBlackFrames >= 100) {
               // Pantalla/tira apagada en negro durante ~4.0s -> Standby
               targetCandidate = "Standby";
-            } else if (consecutiveStrongVideoFrames >= 12 || consecutiveVideoFrames >= 16) {
-              // Conmuta a Vídeo ante ~0.5s..0.6s de actividad continua (multizona o full_screen: true).
-              // Un cambio puntual de lámpara en la app Govee se asienta en <0.20s (<5 frames) y decae a 0,
-              // manteniéndose 100% en Estático.
+            } else if (consecutiveStrongVideoFrames >= 8) {
+              // Conmuta a Vídeo ante ~0.3s (8 frames) de contraste espacial multizona real (hasSpatialDiversity).
+              // Cambiar de color estático en la app Govee tiene contrast=0 (sin diversidad espacial),
+              // por lo que consecutiveStrongVideoFrames permanece en 0 y se mantiene 100% en Estático.
               targetCandidate = "Vídeo";
             }
           } else if (currentMode == "Vídeo") {
